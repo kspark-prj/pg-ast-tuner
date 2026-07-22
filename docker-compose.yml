@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  my-app-db:
+    container_name: "my-app-db"
+    image: postgres:latest
+    ports:
+      - "5432:5432"
+    # 👇 1. 컨테이너 종료 전 안전하게 데이터를 쓸 수 있도록 대기 시간을 2분으로 늘립니다.
+    stop_grace_period: 2m
+    volumes:
+      # 👇 호스트 디렉토리 대신 도커 볼륨(postgres_data)을 사용하도록 변경
+      - postgres_data:/var/lib/postgresql/data
+      - "./init-scripts:/docker-entrypoint-initdb.d"
+    environment:
+      - "POSTGRES_DB=my-app-db"
+      - "POSTGRES_USER=postgres"
+      - "POSTGRES_PASSWORD=root"
+      - "PGDATA=/var/lib/postgresql/data/pgdata"
+    # 👇 2. 대량 데이터 처리에 알맞게 튜닝된 파라미터를 추가합니다.
+    command: [
+      "postgres",
+      "-c", "shared_preload_libraries=pg_stat_statements",
+      "-c", "pg_stat_statements.track=all",
+      # 대량 처리를 위한 메모리 버퍼 확장 (기본값은 너무 작음, 호스트 메모리가 8GB 이상이라면 1GB~2GB 권장)
+      "-c", "shared_buffers=1GB", 
+      # 체크포인트가 너무 자주 발생해서 디스크 IO 병목이 오는 것을 방지 (기본 5분 -> 15분)
+      "-c", "checkpoint_timeout=15min", 
+      # 체크포인트를 유발하는 WAL 파일 최대 크기 확장 (기본 1GB -> 4GB)
+      "-c", "max_wal_size=4GB",
+      # 체크포인트 시 디스크 쓰기를 급격하게 하지 않고 부드럽게 분산
+      "-c", "checkpoint_completion_target=0.9"
+    ]
+    restart: always
+
+# 👇 최상위 레벨에 도커 볼륨 정의를 추가합니다.
+volumes:
+  postgres_data:
