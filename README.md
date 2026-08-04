@@ -134,5 +134,4 @@ python main.py
 
 "디스크 I/O를 유발하는가?" > 1. 인덱스가 없어서 디스크 처음부터 끝까지 다 읽는가? (Seq Scan) 2. 메모리가 부족해서 디스크에 임시 파일을 쓰고 정렬하는가? (External Sort) 3. 적절한 조인 경로가 없어 상대 테이블을 수만 번 반복해서 뒤지는가? (Non-indexed Nested Loop)
 
-pip install pyinstaller
-pyinstaller --noconsole --onefile main.py
+pyinstaller -w -F --icon=main.ico --exclude-module PIL --exclude-module Pillow main.py
