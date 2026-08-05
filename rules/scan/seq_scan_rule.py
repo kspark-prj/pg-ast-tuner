@@ -1,11 +1,14 @@
 import re
 from datetime import datetime, timedelta
 from typing import List, Union
+
 import sqlglot
 from sqlglot import exp
-from rules.base_rule import BaseRule, RuleContext
-from models.recommendation import RecommendationModel
+
 from core.parser import PGPlanAnalyzer
+from models.recommendation import RecommendationModel
+from rules.base_rule import BaseRule, RuleContext
+
 
 class SeqScanRule(BaseRule):
     RULE_ID = "RULE_SCAN_001"
@@ -17,10 +20,69 @@ class SeqScanRule(BaseRule):
     DEFAULT_PRIORITY = 1
     DEFAULT_SEVERITY = "CRITICAL"
 
+    @staticmethod
+    def _reorder_index_columns(query: str, columns: list[str]) -> list[str]:
+        """
+        인덱스 생성 시 성능 최적화를 위해 컬럼 순서를 재정렬합니다.
+        1순위: 등가(=, IS NULL) 조건 컬럼 (선두 배치)
+        2순위: 범위/부등호/IN/LIKE 등의 조건 컬럼 (후순위 배치)
+        """
+        if not columns:
+            return columns
+
+        eq_cols = []
+        range_cols = []
+
+        try:
+            parsed_tree = sqlglot.parse_one(query, read="postgres")
+
+            for col in columns:
+                is_equality = False
+                col_lower = col.lower().strip()
+
+                for col_node in parsed_tree.find_all(exp.Column):
+                    # AST 컬럼 노드 명칭 안전 매칭
+                    node_col_name = (
+                        col_node.name.lower().strip()
+                        if hasattr(col_node, "name")
+                        else col_node.this.name.lower().strip()
+                    )
+                    if node_col_name == col_lower:
+                        parent = col_node.parent
+                        # EQ(=) 연산자이거나 IS NULL 조건인지 탐색 (IS NOT NULL이나 IN 연산은 제외)
+                        while parent and not isinstance(parent, (exp.Where, exp.Join)):
+                            if (
+                                isinstance(parent, exp.EQ)
+                                or isinstance(parent, exp.Is)
+                                and isinstance(parent.expression, exp.Null)
+                            ):
+                                is_equality = True
+                                break
+                            parent = parent.parent
+                        if is_equality:
+                            break
+
+                if is_equality:
+                    eq_cols.append(col)
+                else:
+                    range_cols.append(col)
+        except Exception:
+            # AST 파싱 실패 시 정규식 기반 Fallback 처리
+            for col in columns:
+                pattern = r"\b" + re.escape(col) + r"\s*=\s*"
+                if re.search(pattern, query, re.IGNORECASE):
+                    eq_cols.append(col)
+                else:
+                    range_cols.append(col)
+
+        # 등가 조건 컬럼 우선 배치 후 범위/기타 조건 배치 (중복 제거 및 순서 보장)
+        ordered = eq_cols + range_cols
+        return list(dict.fromkeys(ordered))
+
     def match(self, context: RuleContext, node: dict) -> bool:
         return node.get("Node Type") == "Seq Scan"
 
-    def analyze(self, context: RuleContext, node: dict) -> List[RecommendationModel]:
+    def analyze(self, context: RuleContext, node: dict) -> list[RecommendationModel]:
         recommendations = []
         node_type = node.get("Node Type", "Seq Scan")
         table_name = node.get("Relation Name")
@@ -45,7 +107,7 @@ class SeqScanRule(BaseRule):
                     recommendation="조건절 컬럼의 인덱스 상태를 수동 검증해주십시오.",
                     plan_node=node_type,
                     estimated_gain="N/A",
-                    false_positive_risk="High (파싱 한계로 인한 오진 가능성)"
+                    false_positive_risk="High (파싱 한계로 인한 오진 가능성)",
                 )
             )
             return recommendations
@@ -58,11 +120,11 @@ class SeqScanRule(BaseRule):
                     description=f"'{table_name}' 테이블은 통계 데이터 건수({meta.total_rows}건)가 적은 소형 테이블입니다.",
                     severity="INFO",
                     priority=5,
-                    reason=f"테이블의 크기가 너무 작아서 인덱스를 타는 것보다 풀 스캔하는 것이 오버헤드가 적습니다.",
+                    reason="테이블의 크기가 너무 작아서 인덱스를 타는 것보다 풀 스캔하는 것이 오버헤드가 적습니다.",
                     recommendation="PostgreSQL 옵티마이저는 오버헤드를 막기 위해 의도적으로 풀 스캔을 선택한 것이므로 정상적인 상태입니다.",
                     plan_node=node_type,
                     estimated_gain="None",
-                    false_positive_risk="Low"
+                    false_positive_risk="Low",
                 )
             )
             return recommendations
@@ -76,7 +138,7 @@ class SeqScanRule(BaseRule):
                         description=f"'{table_name}' 테이블의 조건절 내부에서 'OR' 연산자가 감지되어 Seq Scan이 유발되었습니다.",
                         severity="WARNING",
                         priority=2,
-                        reason=f"OR 연산자를 사용하면 단일 B-Tree 인덱스가 작동하지 않을 수 있습니다.",
+                        reason="OR 연산자를 사용하면 단일 B-Tree 인덱스가 작동하지 않을 수 있습니다.",
                         recommendation="OR 조건 양측의 각 필터 컬럼에 개별 단일 인덱스를 구축하여 옵티마이저가 Bitmap Or Scan을 타도록 유도하십시오.\n※ 주의: CONCURRENTLY 인덱스 생성은 트랜잭션 블록 외부(autocommit=True 상태)에서 수행되어야 합니다.",
                         recommended_sql="\n".join(
                             [
@@ -86,7 +148,7 @@ class SeqScanRule(BaseRule):
                         ),
                         plan_node=node_type,
                         estimated_gain="Medium to High",
-                        false_positive_risk="Low"
+                        false_positive_risk="Low",
                     )
                 )
 
@@ -106,7 +168,7 @@ class SeqScanRule(BaseRule):
                             recommended_sql=f"CREATE EXTENSION IF NOT EXISTS pg_trgm;\nCREATE INDEX CONCURRENTLY idx_{table_name}_{col}_trgm ON {table_name} USING gin ({col} gin_trgm_ops);",
                             plan_node=node_type,
                             estimated_gain="High",
-                            false_positive_risk="Medium (GIN 인덱스 업데이트 비용 및 디스크 공간 추가 발생)"
+                            false_positive_risk="Medium (GIN 인덱스 업데이트 비용 및 디스크 공간 추가 발생)",
                         )
                     )
                     break
@@ -122,11 +184,28 @@ class SeqScanRule(BaseRule):
                     try:
                         parsed_tree = sqlglot.parse_one(context.clean_query, read="postgres")
                         for col_node in parsed_tree.find_all(exp.Column):
-                            if col_node.this.name.lower().strip() == col.lower().strip():
+                            node_col_name = (
+                                col_node.name.lower().strip()
+                                if hasattr(col_node, "name")
+                                else col_node.this.name.lower().strip()
+                            )
+                            if node_col_name == col.lower().strip():
                                 parent = col_node.parent
                                 outermost_wrapper = None
                                 # WHERE/JOIN/비교연산자 최상위 단계 이전의 가공 표현식(함수, 형변환) 탐색
-                                while parent and not isinstance(parent, (exp.Where, exp.Join, exp.EQ, exp.GT, exp.LT, exp.GTE, exp.LTE, exp.NEQ)):
+                                while parent and not isinstance(
+                                    parent,
+                                    (
+                                        exp.Where,
+                                        exp.Join,
+                                        exp.EQ,
+                                        exp.GT,
+                                        exp.LT,
+                                        exp.GTE,
+                                        exp.LTE,
+                                        exp.NEQ,
+                                    ),
+                                ):
                                     if isinstance(parent, (exp.Func, exp.Anonymous, exp.Cast)):
                                         outermost_wrapper = parent
                                     parent = parent.parent
@@ -140,7 +219,12 @@ class SeqScanRule(BaseRule):
                                         func_name = outermost_wrapper.name.upper()
                                         expr = f"{func_name}({col})"
                                     else:
-                                        func_name = outermost_wrapper.sql_names()[0].upper() if hasattr(outermost_wrapper, "sql_names") and outermost_wrapper.sql_names() else outermost_wrapper.__class__.__name__.upper()
+                                        func_name = (
+                                            outermost_wrapper.sql_names()[0].upper()
+                                            if hasattr(outermost_wrapper, "sql_names")
+                                            and outermost_wrapper.sql_names()
+                                            else outermost_wrapper.__class__.__name__.upper()
+                                        )
                                         expr = f"{func_name}({col})"
                                     break
                     except Exception:
@@ -148,9 +232,7 @@ class SeqScanRule(BaseRule):
 
                     # 2. 정적 정규식 Fallback (AST 파싱 실패 시 대비)
                     if not ast_match:
-                        pattern = (
-                            r"\b(\w+)\(\s*(?:\w+\.)?" + re.escape(col) + r"\s*(?:,\s*.*?)?\)"
-                        )
+                        pattern = r"\b(\w+)\(\s*(?:\w+\.)?" + re.escape(col) + r"\s*(?:,\s*.*?)?\)"
                         match = re.search(pattern, context.raw_query, re.IGNORECASE)
                         if match:
                             func_name = match.group(1).upper()
@@ -187,8 +269,10 @@ class SeqScanRule(BaseRule):
                                 start_str = start_dt.strftime("%Y-%m-%d 00:00:00")
                                 end_str = end_dt.strftime("%Y-%m-%d 00:00:00")
                             except Exception:
-                                start_str = "2026-05-15 00:00:00"
-                                end_str = "2026-05-16 00:00:00"
+                                today = datetime.now()
+                                tomorrow = today + timedelta(days=1)
+                                start_str = today.strftime("%Y-%m-%d 00:00:00")
+                                end_str = tomorrow.strftime("%Y-%m-%d 00:00:00")
 
                             rec_sql = (
                                 f"-- 방법 1: 범위 조건식(Between)으로 우변 변경 (가장 권장)\n"
@@ -219,56 +303,58 @@ class SeqScanRule(BaseRule):
                                 description=f"'{table_name}' 테이블의 인덱스 컬럼({col})이 WHERE 조건절 내부에서 {func_name}() 가공식으로 감싸져 인덱스가 무력화(Index Suppression)되었습니다.",
                                 severity="CRITICAL",
                                 priority=1,
-                                reason=f"인덱스 컬럼을 함수나 형변환으로 감싸면 옵티마이저가 인덱스 내부 엔트리를 매핑할 수 없어 전체 테이블을 다 읽어야 합니다.",
+                                reason="인덱스 컬럼을 함수나 형변환으로 감싸면 옵티마이저가 인덱스 내부 엔트리를 매핑할 수 없어 전체 테이블을 다 읽어야 합니다.",
                                 recommendation=f"인덱스 컬럼 원본이 가공 없이 노출되도록 조건식 우변을 변경하거나, 해당 가공식({expr})이 그대로 들어간 '함수 기반 인덱스(Functional Index)'를 설계하십시오.",
                                 recommended_sql=rec_sql,
                                 plan_node=node_type,
                                 estimated_gain="High",
-                                false_positive_risk="Low"
+                                false_positive_risk="Low",
                             )
                         )
                         break
 
             if not suppressed_detected and not front_wildcard_detected:
-                unindexed_cols = [
-                    col for col in where_cols if col not in meta.indexed_columns
-                ]
+                unindexed_cols = [col for col in where_cols if col not in meta.indexed_columns]
                 usable_index = meta.find_usable_index_for_cols(where_cols)
 
                 if unindexed_cols:
+                    # 등가(=) 조건 컬럼 선두 배치 재정렬
+                    ordered_unindexed_cols = self._reorder_index_columns(
+                        context.raw_query, unindexed_cols
+                    )
                     recommendations.append(
                         RecommendationModel(
                             title=f"'{table_name}' 미인덱스 필터 컬럼 감지",
-                            description=f"'{table_name}' 테이블에 전체 스캔 발생. 조건절 필수 필터 컬럼 {unindexed_cols}에 인덱스가 전혀 구성되어 있지 않습니다.",
+                            description=f"'{table_name}' 테이블에 전체 스캔 발생. 조건절 필수 필터 컬럼 {ordered_unindexed_cols}에 인덱스가 전혀 구성되어 있지 않습니다.",
                             severity="CRITICAL",
                             priority=1,
                             reason="WHERE 조건에 맞는 행을 찾기 위해 매번 디스크에서 모든 테이블 블록을 읽고 있습니다.",
                             recommendation="테이블 스캔 비용을 줄이기 위해 등가(=) 조건 컬럼을 선두로 구성한 복합 인덱스를 무중단(CONCURRENTLY) 방식으로 생성하십시오.\n※ 주의: CONCURRENTLY 인덱스 생성은 트랜잭션 블록 외부에서 수행해야 합니다.",
-                            recommended_sql=f"CREATE INDEX CONCURRENTLY idx_{table_name}_{'_'.join(unindexed_cols)} ON {table_name} ({', '.join(unindexed_cols)});",
+                            recommended_sql=f"CREATE INDEX CONCURRENTLY idx_{table_name}_{'_'.join(ordered_unindexed_cols)} ON {table_name} ({', '.join(ordered_unindexed_cols)});",
                             plan_node=node_type,
                             estimated_gain="High",
-                            false_positive_risk="Low"
+                            false_positive_risk="Low",
                         )
                     )
                 elif not usable_index:
+                    # 등가(=) 조건 컬럼 선두 배치 재정렬
+                    ordered_where_cols = self._reorder_index_columns(context.raw_query, where_cols)
                     recommendations.append(
                         RecommendationModel(
                             title=f"'{table_name}' 인덱스 선두 컬럼 누락",
-                            description=f"'{table_name}' 테이블의 조건절 컬럼 {where_cols}은 기존 복합 인덱스에 존재하지만, 복합 인덱스의 선두(첫 번째) 컬럼이 조건절에 빠져있어 인덱스 스캔을 활용하지 못하고 있습니다.",
+                            description=f"'{table_name}' 테이블의 조건절 컬럼 {ordered_where_cols}은 기존 복합 인덱스에 존재하지만, 복합 인덱스의 선두(첫 번째) 컬럼이 조건절에 빠져있어 인덱스 스캔을 활용하지 못하고 있습니다.",
                             severity="CRITICAL",
                             priority=1,
                             reason="B-Tree 복합 인덱스는 선행 컬럼이 조건절에 제공되지 않으면 인덱스 범위 검색이 불가능하여 풀 스캔을 수행합니다.",
                             recommendation="현재 쿼리의 필터 조건 컬럼을 맨 앞 순서로 배치하는 최적화된 신규 인덱스를 설계하여 인덱스 풀 스캔 비용을 상쇄하십시오.\n※ 주의: CONCURRENTLY 인덱스 생성은 트랜잭션 블록 외부에서 수행해야 합니다.",
-                            recommended_sql=f"CREATE INDEX CONCURRENTLY idx_{table_name}_{'_'.join(where_cols)} ON {table_name} ({', '.join(where_cols)});",
+                            recommended_sql=f"CREATE INDEX CONCURRENTLY idx_{table_name}_{'_'.join(ordered_where_cols)} ON {table_name} ({', '.join(ordered_where_cols)});",
                             plan_node=node_type,
                             estimated_gain="High",
-                            false_positive_risk="Low"
+                            false_positive_risk="Low",
                         )
                     )
                 elif meta.total_rows > 10000:
-                    selectivity = (
-                        (actual_rows / meta.total_rows) if meta.total_rows > 0 else 1.0
-                    )
+                    selectivity = (actual_rows / meta.total_rows) if meta.total_rows > 0 else 1.0
                     if selectivity < 0.1:
                         recommendations.append(
                             RecommendationModel(
@@ -281,7 +367,7 @@ class SeqScanRule(BaseRule):
                                 recommended_sql=f"ANALYZE VERBOSE {table_name};",
                                 plan_node=node_type,
                                 estimated_gain="Medium",
-                                false_positive_risk="Low"
+                                false_positive_risk="Low",
                             )
                         )
 
@@ -301,7 +387,7 @@ class SeqScanRule(BaseRule):
                         recommended_sql=f"ANALYZE VERBOSE {table_name};",
                         plan_node=node_type,
                         estimated_gain="None",
-                        false_positive_risk="Low"
+                        false_positive_risk="Low",
                     )
                 )
             else:
@@ -316,7 +402,7 @@ class SeqScanRule(BaseRule):
                         recommended_sql=f"CREATE INDEX CONCURRENTLY idx_{table_name}_{join_group_cols[0]} ON {table_name} ({join_group_cols[0]});",
                         plan_node=node_type,
                         estimated_gain="Medium",
-                        false_positive_risk="Low"
+                        false_positive_risk="Low",
                     )
                 )
 

@@ -18,11 +18,10 @@ from psycopg.rows import dict_row
 # 모듈화 패키지 임포트
 from config import ConfigManager
 from core.catalog import PGMetadataProvider
-from core.parser import PGPlanAnalyzer
 from core.engine import RuleEngine
-from rules.base_rule import RuleContext
+from core.parser import PGPlanAnalyzer
 from models.recommendation import RecommendationModel
-
+from rules.base_rule import RuleContext
 
 # ==========================================
 # 상용 GUI 애플리케이션 (CustomTkinter)
@@ -215,7 +214,7 @@ GROUP BY d.dept_id, d.dept_name;""",
             return str(err.pgerror)
         return str(err).strip()
 
-    def run_analysis(self, query: str, conn_params: Dict[str, str]):
+    def run_analysis(self, query: str, conn_params: dict[str, str]):
         dsn = f"host={conn_params['host']} port={conn_params['port']} dbname={conn_params['dbname']} user={conn_params['user']} password={conn_params['password']}"
 
         try:
@@ -249,7 +248,7 @@ GROUP BY d.dept_id, d.dept_name;""",
                         raw_query=query,
                         clean_query=clean_query,
                         metadata_provider=metadata_provider,
-                        plan_data=explain_data
+                        plan_data=explain_data,
                     )
 
                     all_recs = []
@@ -269,7 +268,7 @@ GROUP BY d.dept_id, d.dept_name;""",
             self.after(
                 0,
                 lambda error_val=err: self.update_result_box_custom(
-                    f"❌ [안전 경고]\n\n{str(error_val)}",
+                    f"❌ [안전 경고]\n\n{error_val!s}",
                     self.color_pink,
                 ),
             )
@@ -345,7 +344,7 @@ GROUP BY d.dept_id, d.dept_name;""",
         self.txt_result.insert("1.0", text)
         self.txt_result.configure(state="disabled")
 
-    def render_recommendations(self, raw_explain: str, recs: List[RecommendationModel]):
+    def render_recommendations(self, raw_explain: str, recs: list[RecommendationModel]):
         self.txt_result.configure(state="normal")
         self.txt_result.delete("1.0", "end")
         self.txt_result.configure(text_color=self.color_text_normal)
@@ -375,8 +374,10 @@ GROUP BY d.dept_id, d.dept_name;""",
                     if rec.severity == "INFO"
                     else "🔷"
                 )
+                rule_str = f" [{rec.rule_id}]" if getattr(rec, "rule_id", None) else ""
                 self.txt_result.insert(
-                    "end", f"{severity_symbol} [{rec.severity}] 튜닝 가이드 #{idx}: {rec.title}\n"
+                    "end",
+                    f"{severity_symbol} [{rec.severity}] 튜닝 가이드 #{idx}{rule_str}: {rec.title}\n",
                 )
                 self.txt_result.insert("end", f"  • 대상 노드  : {rec.plan_node or 'Unknown'}\n")
                 self.txt_result.insert("end", f"  • 현상 및 원인: {rec.reason}\n")
