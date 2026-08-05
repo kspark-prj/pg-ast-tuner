@@ -1,6 +1,8 @@
 import re
 from datetime import datetime, timedelta
 from typing import List, Union
+import sqlglot
+from sqlglot import exp
 from rules.base_rule import BaseRule, RuleContext
 from models.recommendation import RecommendationModel
 from core.parser import PGPlanAnalyzer
@@ -112,14 +114,50 @@ class SeqScanRule(BaseRule):
             suppressed_detected = False
             if not front_wildcard_detected:
                 for col in where_cols:
-                    pattern = (
-                        r"\b(\w+)\(\s*(?:\w+\.)?" + re.escape(col) + r"\s*(?:,\s*.*?)?\)"
-                    )
-                    match = re.search(pattern, context.raw_query, re.IGNORECASE)
+                    ast_match = False
+                    func_name = None
+                    expr = f"{col}"
 
-                    if match:
+                    # 1. AST 기반 정밀 매칭 (대소문자, 따옴표, 타입캐스팅 등 무력화 방지)
+                    try:
+                        parsed_tree = sqlglot.parse_one(context.clean_query, read="postgres")
+                        for col_node in parsed_tree.find_all(exp.Column):
+                            if col_node.this.name.lower().strip() == col.lower().strip():
+                                parent = col_node.parent
+                                outermost_wrapper = None
+                                # WHERE/JOIN/비교연산자 최상위 단계 이전의 가공 표현식(함수, 형변환) 탐색
+                                while parent and not isinstance(parent, (exp.Where, exp.Join, exp.EQ, exp.GT, exp.LT, exp.GTE, exp.LTE, exp.NEQ)):
+                                    if isinstance(parent, (exp.Func, exp.Anonymous, exp.Cast)):
+                                        outermost_wrapper = parent
+                                    parent = parent.parent
+
+                                if outermost_wrapper:
+                                    ast_match = True
+                                    if isinstance(outermost_wrapper, exp.Cast):
+                                        func_name = "CAST"
+                                        expr = f"CAST({col} AS {outermost_wrapper.to.sql()})"
+                                    elif isinstance(outermost_wrapper, exp.Anonymous):
+                                        func_name = outermost_wrapper.name.upper()
+                                        expr = f"{func_name}({col})"
+                                    else:
+                                        func_name = outermost_wrapper.sql_names()[0].upper() if hasattr(outermost_wrapper, "sql_names") and outermost_wrapper.sql_names() else outermost_wrapper.__class__.__name__.upper()
+                                        expr = f"{func_name}({col})"
+                                    break
+                    except Exception:
+                        pass
+
+                    # 2. 정적 정규식 Fallback (AST 파싱 실패 시 대비)
+                    if not ast_match:
+                        pattern = (
+                            r"\b(\w+)\(\s*(?:\w+\.)?" + re.escape(col) + r"\s*(?:,\s*.*?)?\)"
+                        )
+                        match = re.search(pattern, context.raw_query, re.IGNORECASE)
+                        if match:
+                            func_name = match.group(1).upper()
+                            expr = f"{func_name}({col})"
+
+                    if func_name:
                         suppressed_detected = True
-                        func_name = match.group(1).upper()
                         rec_sql = ""
                         if func_name in ["UPPER", "LOWER"]:
                             real_val = PGPlanAnalyzer.extract_right_value_from_ast(
@@ -137,7 +175,7 @@ class SeqScanRule(BaseRule):
                                 f"-- WHERE {col} = {processed_val};\n\n"
                                 f"-- 방법 2: 함수 기반 인덱스(Functional Index) 생성 (트랜잭션 외부 수행 권장)\n"
                                 f"CREATE INDEX CONCURRENTLY idx_{table_name}_{col}_{func_name.lower()} "
-                                f"ON {table_name} ({func_name}({col}));"
+                                f"ON {table_name} ({expr});"
                             )
                         elif func_name in ["DATE", "TRUNC"]:
                             extracted_date = PGPlanAnalyzer.extract_date_literal_from_ast(
@@ -159,22 +197,30 @@ class SeqScanRule(BaseRule):
                                 f"CREATE INDEX CONCURRENTLY idx_{table_name}_{col}_date "
                                 f"ON {table_name} (CAST({col} AS date));"
                             )
+                        elif func_name == "CAST":
+                            rec_sql = (
+                                f"-- 방법 1: 좌변 형변환(Cast) 제거 또는 우변 형변환으로 변경 (가장 권장)\n"
+                                f"-- WHERE {col} = ...;\n\n"
+                                f"-- 방법 2: 함수 기반 인덱스(Functional Index) 생성 (트랜잭션 외부 수행 권장)\n"
+                                f"CREATE INDEX CONCURRENTLY idx_{table_name}_{col}_cast "
+                                f"ON {table_name} ({expr});"
+                            )
                         else:
                             rec_sql = (
                                 f"-- 방법 1: 좌변 가공 회피하도록 쿼리 수정\n\n"
                                 f"-- 방법 2: 함수 기반 인덱스(Functional Index) 생성 (트랜잭션 외부 수행 권장)\n"
                                 f"CREATE INDEX CONCURRENTLY idx_{table_name}_{col}_func "
-                                f"ON {table_name} ({func_name}({col}));"
+                                f"ON {table_name} ({expr});"
                             )
 
                         recommendations.append(
                             RecommendationModel(
                                 title=f"'{table_name}' 인덱스 컬럼 가공 감지",
-                                description=f"'{table_name}' 테이블의 인덱스 컬럼({col})이 WHERE 조건절 내부에서 {func_name}() 함수로 가공되어 인덱스가 무력화(Index Suppression)되었습니다.",
+                                description=f"'{table_name}' 테이블의 인덱스 컬럼({col})이 WHERE 조건절 내부에서 {func_name}() 가공식으로 감싸져 인덱스가 무력화(Index Suppression)되었습니다.",
                                 severity="CRITICAL",
                                 priority=1,
-                                reason=f"인덱스 컬럼을 함수로 감싸면 옵티마이저가 인덱스 내부 엔트리를 매핑할 수 없어 전체 테이블을 다 읽어야 합니다.",
-                                recommendation=f"인덱스 컬럼 원본이 가공 없이 노출되도록 조건식 우변을 변경하거나, 해당 {func_name}() 함수가 그대로 들어간 '함수 기반 인덱스(Functional Index)'를 설계하십시오.",
+                                reason=f"인덱스 컬럼을 함수나 형변환으로 감싸면 옵티마이저가 인덱스 내부 엔트리를 매핑할 수 없어 전체 테이블을 다 읽어야 합니다.",
+                                recommendation=f"인덱스 컬럼 원본이 가공 없이 노출되도록 조건식 우변을 변경하거나, 해당 가공식({expr})이 그대로 들어간 '함수 기반 인덱스(Functional Index)'를 설계하십시오.",
                                 recommended_sql=rec_sql,
                                 plan_node=node_type,
                                 estimated_gain="High",
