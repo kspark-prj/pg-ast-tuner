@@ -2,17 +2,17 @@
 # PostgreSQL Auto Tuning Advisor Dependencies
 # ==========================================
 
-# 1. Database Driver (성능과 직결되는 최신 3.x 버전 타겟팅)
-psycopg[binary]>=3.3.0,<3.4.0
+# 1. Database Driver (C-extension 바이너리 포함 v3)
+psycopg[binary]>=3.1.0,<4.0.0
 
-# 2. SQL AST 파서 및 추상 구문 트리 분석 엔진 (최신 SQLGlot 26.x 릴리즈 대응)
+# 2. SQL AST 파서 및 추상 구문 트리 분석 엔진
 sqlglot>=26.0.0,<27.0.0
 
-# 3. 데이터 검증 및 스키마 구조화 (안정적인 Pydantic v2 최신 패치 대응)
-pydantic>=2.13.0,<3.0.0
+# 3. 데이터 검증 및 스키마 구조화 (Pydantic v2)
+pydantic>=2.7.0,<3.0.0
 
-# 4. 모던 다크 테마 GUI 툴킷 (새로운 위젯 구성 요소가 포함된 v6 릴리즈 반영)
-customtkinter>=6.0.0,<7.0.0
+# 4. 모던 다크 테마 GUI 툴킷 (v5 안정 버전)
+customtkinter>=5.2.0,<6.0.0
 
-# 5. 단위 및 모듈 테스트 프레임워크 (테스트 자동화용)
-pytest>=9.0.0,<10.0.0
+# 5. 단위 및 모듈 테스트 프레임워크
+pytest>=8.0.0,<10.0.0

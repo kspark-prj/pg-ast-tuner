@@ -79,14 +79,17 @@ project/
 ```
 
 #### 1단계. SQL AST 문법 트리 분석 (`sqlglot` 엔진)
+
 - **목적**: 쿼리에서 "필터링(`WHERE`)이나 정렬(`ORDER BY`)에 실제로 사용된 테이블과 컬럼"이 무엇인지 식별합니다.
 - **이유**: 단순 정규식이나 문자열 검색은 테이블 별칭(Alias, 예: `orders o` -> `o.user_id`)이나 복잡한 서브쿼리 내의 컬럼을 제대로 짚어내지 못합니다. AST 파서는 이를 트리 구조로 완벽히 쪼개어 `orders` 테이블의 `user_id` 컬럼이 조건절에 쓰였음을 명확히 알아냅니다.
 
 #### 2단계. PostgreSQL 시스템 카탈로그 조회 (`PGMetadataProvider`)
+
 - **목적**: 해당 테이블에 **"실제 어떤 인덱스들이 만들어져 있는지"**, 그리고 **"테이블 크기(Row Count)가 얼마나 큰지"** 확인합니다.
 - **이유**: 소량의 데이터(예: 10건)가 들어있는 테이블은 인덱스가 있어도 옵티마이저가 풀 스캔(`Seq Scan`)을 해버립니다. 따라서 카탈로그를 조회해 실제 테이블 규모와 인덱스 컬럼 목록(`user_id`가 인덱스 첫 열로 지정되어 있는지 등)을 파악합니다.
 
 #### 3단계. EXPLAIN 실행 계획 추적 (`PGPlanAnalyzer`)
+
 - **목적**: PostgreSQL 옵티마이저가 실제로 수립한 "물리적 실행 계획"을 받아옵니다.
 - **이유**: 아무리 쿼리를 잘 짜고 인덱스가 있어도, 옵티마이저가 엉뚱한 길을 선택할 수 있기 때문입니다. 실행 계획상에 `Seq Scan` 노드가 찍혔는지를 최종 확인합니다.
 
@@ -97,6 +100,7 @@ project/
 본 프로젝트는 OCP(Open-Closed Principle)를 지향하여 설계되었습니다. 새로운 분석 룰(Rule)을 추가할 때 **엔진 코드(`engine.py`)나 UI 코드(`main.py`)를 전혀 수정할 필요가 없습니다.**
 
 ### 규칙 추가 단계:
+
 1. `rules/` 하위의 적절한 카테고리 폴더(예: `rules/scan/`)에 새 파이썬 파일 생성
 2. `BaseRule` 클래스를 상속하는 규칙 클래스 정의 및 필수 메타데이터/메서드 구현:
 
@@ -137,6 +141,7 @@ class MyCustomScanRule(BaseRule):
 ## 🚀 요구 사항 및 실행 방법 (Quick Start)
 
 ### ⚙️ Prerequisites
+
 실행을 위해 아래 라이브러리 설치가 필요합니다.
 
 ```bash
@@ -144,12 +149,15 @@ pip install customtkinter psycopg sqlglot pydantic pytest
 ```
 
 ### 🏃 GUI 실행 방법
+
 ```bash
 python main.py
 ```
 
 ### 🧪 단위 테스트 실행 방법
+
 작성된 규칙들의 기능 및 동적 디스커버리 엔진 작동 상태를 검증합니다.
+
 ```bash
 python -m pytest
 ```
@@ -157,8 +165,24 @@ python -m pytest
 ---
 
 ## 📦 패키징 가이드 (Executable Build)
-Windows 환경 등에서 단일 실행 파일(`.exe`)로 배포하고 싶은 경우, 아래 PyInstaller 명령을 사용하십시오.
+
+Windows 환경 등에서 단일 실행 파일(`.exe`)로 배포하고 싶은 경우, 파이썬 환경 불일치를 방지하고 `psycopg` 등의 의존성을 올바르게 포함하기 위해 아래와 같이 **현재 파이썬 환경의 모듈 방식으로 실행**하는 것을 권장합니다.
+
+### 1. Spec 파일 기반 빌드 (권장)
+이미 프로젝트 루트에 구성되어 있는 [`main.spec`](file:///C:/Users/kspar/Tools/github/pg-ast-tuner/main.spec) 파일에는 `psycopg` 모듈 수집(`collect_all`) 및 아이콘 설정 등이 모두 정의되어 있습니다.
 
 ```bash
-pyinstaller -w -F --icon=main.ico --exclude-module PIL --exclude-module Pillow main.py
+# PyInstaller가 설치되어 있지 않다면 먼저 설치
+pip install pyinstaller
+
+# Spec 파일을 사용하여 빌드 실행
+python -m PyInstaller main.spec
 ```
+
+### 2. 커맨드라인 명령어로 직접 빌드할 경우
+Spec 파일 없이 명령어로 직접 빌드하는 경우, `psycopg` 모듈의 동적 바인딩 파일들을 수집하도록 `--collect-all` 옵션을 반드시 포함해야 합니다.
+
+```bash
+python -m PyInstaller -w -F --icon=main.ico --exclude-module PIL --exclude-module Pillow --collect-all psycopg main.py
+```
+
