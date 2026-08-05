@@ -121,13 +121,10 @@ class App(ctk.CTk):
         self.txt_query.grid(row=1, column=0, padx=15, pady=10, sticky="nsew")
         self.txt_query.insert(
             "1.0",
-            """SELECT
-    d.dept_name,
-    COALESCE(count(u.user_id), 0) AS user_count
-FROM gb_departments d
-LEFT JOIN gb_users u ON d.dept_id = u.dept_id
-WHERE u.name LIKE '%admin'
-GROUP BY d.dept_id, d.dept_name;""",
+            """SELECT *
+    FROM test_orders
+    WHERE order_status = 'PENDING'
+    AND order_amount > 500.00;""",
         )
 
         try:
