@@ -169,6 +169,7 @@ python -m pytest
 Windows 환경 등에서 단일 실행 파일(`.exe`)로 배포하고 싶은 경우, 파이썬 환경 불일치를 방지하고 `psycopg` 등의 의존성을 올바르게 포함하기 위해 아래와 같이 **현재 파이썬 환경의 모듈 방식으로 실행**하는 것을 권장합니다.
 
 ### 1. Spec 파일 기반 빌드 (권장)
+
 이미 프로젝트 루트에 구성되어 있는 [`main.spec`](file:///C:/Users/kspar/Tools/github/pg-ast-tuner/main.spec) 파일에는 `psycopg` 모듈 수집(`collect_all`) 및 아이콘 설정 등이 모두 정의되어 있습니다.
 
 ```bash
@@ -180,9 +181,9 @@ python -m PyInstaller main.spec
 ```
 
 ### 2. 커맨드라인 명령어로 직접 빌드할 경우
+
 Spec 파일 없이 명령어로 직접 빌드하는 경우, `psycopg` 모듈의 동적 바인딩 파일들을 수집하도록 `--collect-all` 옵션을 반드시 포함해야 합니다.
 
 ```bash
-python -m PyInstaller -w -F --icon=main.ico --exclude-module PIL --exclude-module Pillow --collect-all psycopg main.py
+python -m PyInstaller -w -F --icon=main.ico --exclude-module PIL --exclude-module Pillow --collect-all psycopg  --collect-submodules rules main.py
 ```
-
