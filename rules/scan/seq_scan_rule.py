@@ -40,20 +40,25 @@ class SeqScanRule(BaseRule):
                 is_equality = False
                 col_lower = col.lower().strip()
 
+                # exp.Column 노드만 순회하도록 명시적 필터링
                 for col_node in parsed_tree.find_all(exp.Column):
-                    # AST 컬럼 노드 명칭 안전 매칭
+                    # 리터럴/값 형태가 아닌 순수 컬럼 명칭만 정밀 매칭
                     node_col_name = (
                         col_node.name.lower().strip()
-                        if hasattr(col_node, "name")
-                        else col_node.this.name.lower().strip()
+                        if hasattr(col_node, "name") and col_node.name
+                        else (
+                            col_node.this.name.lower().strip()
+                            if hasattr(col_node.this, "name")
+                            else str(col_node.this).lower().strip()
+                        )
                     )
+
                     if node_col_name == col_lower:
                         parent = col_node.parent
-                        # EQ(=) 연산자이거나 IS NULL 조건인지 탐색 (IS NOT NULL이나 IN 연산은 제외)
+                        # EQ(=) 연산자이거나 IS NULL 조건인지 탐색
                         while parent and not isinstance(parent, (exp.Where, exp.Join)):
-                            if (
-                                isinstance(parent, exp.EQ)
-                                or isinstance(parent, exp.Is)
+                            if isinstance(parent, exp.EQ) or (
+                                isinstance(parent, exp.Is)
                                 and isinstance(parent.expression, exp.Null)
                             ):
                                 is_equality = True
@@ -67,9 +72,9 @@ class SeqScanRule(BaseRule):
                 else:
                     range_cols.append(col)
         except Exception:
-            # AST 파싱 실패 시 정규식 기반 Fallback 처리
+            # AST 파싱 실패 시 정규식 기반 Fallback 처리 (리터럴값 오매칭 방지를 위한 \b 경계 강화)
             for col in columns:
-                pattern = r"\b" + re.escape(col) + r"\s*=\s*"
+                pattern = r"\b" + re.escape(col) + r"\b\s*=\s*"
                 if re.search(pattern, query, re.IGNORECASE):
                     eq_cols.append(col)
                 else:
@@ -95,6 +100,14 @@ class SeqScanRule(BaseRule):
         where_cols, join_group_cols, parse_success, has_or = (
             PGPlanAnalyzer.extract_columns_via_ast_ordered(context.raw_query, table_name)
         )
+
+        # [보완] where_cols 리스트에서 리터럴 값/잘못 추출된 컬럼 식별자 2차 필터링
+        if where_cols:
+            where_cols = [
+                c
+                for c in where_cols
+                if isinstance(c, str) and not c.startswith("'") and not c.startswith('"')
+            ]
 
         if not parse_success:
             recommendations.append(
@@ -180,14 +193,18 @@ class SeqScanRule(BaseRule):
                     func_name = None
                     expr = f"{col}"
 
-                    # 1. AST 기반 정밀 매칭 (대소문자, 따옴표, 타입캐스팅 등 무력화 방지)
+                    # 1. AST 기반 정밀 매칭 (exp.Column만 추적하도록 보완)
                     try:
                         parsed_tree = sqlglot.parse_one(context.clean_query, read="postgres")
                         for col_node in parsed_tree.find_all(exp.Column):
                             node_col_name = (
                                 col_node.name.lower().strip()
-                                if hasattr(col_node, "name")
-                                else col_node.this.name.lower().strip()
+                                if hasattr(col_node, "name") and col_node.name
+                                else (
+                                    col_node.this.name.lower().strip()
+                                    if hasattr(col_node.this, "name")
+                                    else str(col_node.this).lower().strip()
+                                )
                             )
                             if node_col_name == col.lower().strip():
                                 parent = col_node.parent
@@ -330,7 +347,7 @@ class SeqScanRule(BaseRule):
                             priority=1,
                             reason="WHERE 조건에 맞는 행을 찾기 위해 매번 디스크에서 모든 테이블 블록을 읽고 있습니다.",
                             recommendation="테이블 스캔 비용을 줄이기 위해 등가(=) 조건 컬럼을 선두로 구성한 복합 인덱스를 무중단(CONCURRENTLY) 방식으로 생성하십시오.\n※ 주의: CONCURRENTLY 인덱스 생성은 트랜잭션 블록 외부에서 수행해야 합니다.",
-                            recommended_sql=f"CREATE INDEX CONCURRENTLY idx_{table_name}_{'_'.join(ordered_unindexed_cols)} ON {table_name} ({', '.join(ordered_unindexed_cols)});",
+                            recommended_sql=f"CREATE INDEX CONCURRENTLY idx_{table_name}_{'_'.join(ordered_unindexed_cols)} ON {table_name} ({', '.join(ordered_unindexed_cols)});\n",
                             plan_node=node_type,
                             estimated_gain="High",
                             false_positive_risk="Low",
@@ -347,7 +364,7 @@ class SeqScanRule(BaseRule):
                             priority=1,
                             reason="B-Tree 복합 인덱스는 선행 컬럼이 조건절에 제공되지 않으면 인덱스 범위 검색이 불가능하여 풀 스캔을 수행합니다.",
                             recommendation="현재 쿼리의 필터 조건 컬럼을 맨 앞 순서로 배치하는 최적화된 신규 인덱스를 설계하여 인덱스 풀 스캔 비용을 상쇄하십시오.\n※ 주의: CONCURRENTLY 인덱스 생성은 트랜잭션 블록 외부에서 수행해야 합니다.",
-                            recommended_sql=f"CREATE INDEX CONCURRENTLY idx_{table_name}_{'_'.join(ordered_where_cols)} ON {table_name} ({', '.join(ordered_where_cols)});",
+                            recommended_sql=f"CREATE INDEX CONCURRENTLY idx_{table_name}_{'_'.join(ordered_where_cols)} ON {table_name} ({', '.join(ordered_where_cols)});\n",
                             plan_node=node_type,
                             estimated_gain="High",
                             false_positive_risk="Low",
@@ -399,7 +416,7 @@ class SeqScanRule(BaseRule):
                         priority=3,
                         reason="대량의 데이터를 해시 결합하거나 정렬/중복 제거할 때 조인/그룹화 선두 키에 인덱스가 있으면 옵티마이저가 더 다양한 결합 방식(예: Merge Join)을 택할 수 있습니다.",
                         recommendation="조인 키 또는 그룹화 선두 컬럼에 인덱스 생성을 고려하십시오.\n※ 주의: CONCURRENTLY 인덱스 생성은 트랜잭션 외부에서 수행해야 합니다.",
-                        recommended_sql=f"CREATE INDEX CONCURRENTLY idx_{table_name}_{join_group_cols[0]} ON {table_name} ({join_group_cols[0]});",
+                        recommended_sql=f"CREATE INDEX CONCURRENTLY idx_{table_name}_{join_group_cols[0]} ON {table_name} ({join_group_cols[0]});\n",
                         plan_node=node_type,
                         estimated_gain="Medium",
                         false_positive_risk="Low",
