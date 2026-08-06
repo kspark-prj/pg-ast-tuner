@@ -1,12 +1,9 @@
 import json
-import os
 import re
 import threading
 import tkinter as tk
-import traceback
-from datetime import datetime, timedelta
 from tkinter import messagebox
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 import customtkinter as ctk
 
@@ -26,6 +23,15 @@ from rules.base_rule import RuleContext
 # ==========================================
 # 상용 GUI 애플리케이션 (CustomTkinter)
 # ==========================================
+
+# severity -> 심볼 매핑 (렌더링 공통 사용)
+# HIGH는 WARNING과 CRITICAL 사이의 심각도로, WARNING과 동일한 심볼로 표시합니다.
+_SEVERITY_SYMBOLS: dict[str, str] = {
+    "CRITICAL": "🔴",
+    "HIGH": "🟠",
+    "WARNING": "🟡",
+    "INFO": "🟢",
+}
 
 
 class App(ctk.CTk):
@@ -55,7 +61,7 @@ class App(ctk.CTk):
 
         labels = ["Host:", "Port:", "DB Name:", "User:", "Password:"]
         keys = ["host", "port", "dbname", "user", "password"]
-        self.entries = {}
+        self.entries: dict[str, ctk.CTkEntry] = {}
 
         for i, (lbl_txt, key) in enumerate(zip(labels, keys)):
             lbl = ctk.CTkLabel(
@@ -192,7 +198,7 @@ class App(ctk.CTk):
 
         conn_params = {key: entry.get().strip() for key, entry in self.entries.items()}
         self.btn_run.configure(state="disabled", text="⏳ 분석 진행 중...")
-        self.update_result_box(
+        self._set_result_text(
             "...데이터베이스 시스템 카탈로그 조회 및 AST 트리를 병합 분석하는 중입니다..."
         )
 
@@ -212,7 +218,11 @@ class App(ctk.CTk):
         return str(err).strip()
 
     def run_analysis(self, query: str, conn_params: dict[str, str]):
-        dsn = f"host={conn_params['host']} port={conn_params['port']} dbname={conn_params['dbname']} user={conn_params['user']} password={conn_params['password']}"
+        dsn = (
+            f"host={conn_params['host']} port={conn_params['port']} "
+            f"dbname={conn_params['dbname']} user={conn_params['user']} "
+            f"password={conn_params['password']}"
+        )
 
         try:
             with psycopg.connect(dsn, connect_timeout=5) as conn:
@@ -231,9 +241,7 @@ class App(ctk.CTk):
                     if not explain_data:
                         self.after(
                             0,
-                            lambda: self.update_result_box(
-                                "[안내] 수집된 실행계획 정보가 비어 있습니다."
-                            ),
+                            lambda: self._set_result_text("[안내] 수집된 실행계획 정보가 비어 있습니다."),
                         )
                         return
 
@@ -248,10 +256,9 @@ class App(ctk.CTk):
                         plan_data=explain_data,
                     )
 
-                    all_recs = []
+                    all_recs: list[RecommendationModel] = []
                     for node in target_nodes:
-                        recs = rule_engine.analyze_node(context, node)
-                        all_recs.extend(recs)
+                        all_recs.extend(rule_engine.analyze_node(context, node))
 
                     # 우선순위 정렬 (우선순위 수치가 작을수록 시급하며, 동일 우선순위에서는 rule_id 및 title로 일관되게 정렬)
                     all_recs.sort(key=lambda r: (r.priority, r.rule_id or "", r.title or ""))
@@ -264,7 +271,7 @@ class App(ctk.CTk):
         except ValueError as err:
             self.after(
                 0,
-                lambda error_val=err: self.update_result_box_custom(
+                lambda error_val=err: self._set_result_text_colored(
                     f"❌ [안전 경고]\n\n{error_val!s}",
                     self.color_pink,
                 ),
@@ -272,7 +279,7 @@ class App(ctk.CTk):
         except psycopg.errors.QueryCanceled as err:
             self.after(
                 0,
-                lambda error_val=err: self.update_result_box_custom(
+                lambda error_val=err: self._set_result_text_colored(
                     "❌ [타임아웃 발생]\n\n쿼리 수행 시간이 한계치(10초)를 초과하여 작업이 강제 취소되었습니다.\n"
                     f"상세 정보: {self.get_error_message(error_val)}",
                     self.color_pink,
@@ -293,7 +300,7 @@ class App(ctk.CTk):
 
             self.after(
                 0,
-                lambda error_val=err, preview_val=error_preview: self.update_result_box_custom(
+                lambda error_val=err, preview_val=error_preview: self._set_result_text_colored(
                     f"❌ [SQL 문법 오류 감지]\n작성하신 SQL 구문에 표준 PostgreSQL 문법에 맞지 않는 부분이 있습니다.\n"
                     f"{preview_val}\n\n상세 메시지: {self.get_error_message(error_val)}",
                     self.color_pink,
@@ -302,7 +309,7 @@ class App(ctk.CTk):
         except psycopg.errors.UndefinedTable as err:
             self.after(
                 0,
-                lambda error_val=err: self.update_result_box_custom(
+                lambda error_val=err: self._set_result_text_colored(
                     f"❌ [테이블 없음 오류]\n\n상세 메시지: {self.get_error_message(error_val)}",
                     self.color_pink,
                 ),
@@ -310,7 +317,7 @@ class App(ctk.CTk):
         except psycopg.errors.UndefinedColumn as err:
             self.after(
                 0,
-                lambda error_val=err: self.update_result_box_custom(
+                lambda error_val=err: self._set_result_text_colored(
                     f"❌ [컬럼 없음 오류]\n\n상세 메시지: {self.get_error_message(error_val)}",
                     self.color_pink,
                 ),
@@ -318,7 +325,7 @@ class App(ctk.CTk):
         except Exception as e:
             self.after(
                 0,
-                lambda error_val=e: self.update_result_box_custom(
+                lambda error_val=e: self._set_result_text_colored(
                     f"❌ [연결 및 실행 에러]\n\n상세 메시지: {self.get_error_message(error_val)}",
                     self.color_pink,
                 ),
@@ -329,17 +336,26 @@ class App(ctk.CTk):
     def enable_run_button(self):
         self.btn_run.configure(state="normal", text="⚡ AST & Heuristics 분석 실행")
 
-    def update_result_box(self, text: str):
+    def _set_result_text(self, text: str):
+        """결과 박스에 일반 텍스트를 출력합니다."""
         self.txt_result.configure(state="normal", text_color=self.color_text_normal)
         self.txt_result.delete("1.0", "end")
         self.txt_result.insert("1.0", text)
         self.txt_result.configure(state="disabled")
 
-    def update_result_box_custom(self, text: str, text_color: str):
+    def _set_result_text_colored(self, text: str, text_color: str):
+        """결과 박스에 지정된 색상으로 텍스트를 출력합니다."""
         self.txt_result.configure(state="normal", text_color=text_color)
         self.txt_result.delete("1.0", "end")
         self.txt_result.insert("1.0", text)
         self.txt_result.configure(state="disabled")
+
+    # 하위 호환용 alias (기존 코드 호환성 유지)
+    def update_result_box(self, text: str):
+        self._set_result_text(text)
+
+    def update_result_box_custom(self, text: str, text_color: str):
+        self._set_result_text_colored(text, text_color)
 
     def render_recommendations(self, raw_explain: str, recs: list[RecommendationModel]):
         self.txt_result.configure(state="normal")
@@ -362,15 +378,7 @@ class App(ctk.CTk):
             )
         else:
             for idx, rec in enumerate(recs, 1):
-                severity_symbol = (
-                    "🔴"
-                    if rec.severity == "CRITICAL"
-                    else "🟡"
-                    if rec.severity == "WARNING"
-                    else "🟢"
-                    if rec.severity == "INFO"
-                    else "🔷"
-                )
+                severity_symbol = _SEVERITY_SYMBOLS.get(rec.severity, "🔷")
                 rule_str = f" [{rec.rule_id}]" if getattr(rec, "rule_id", None) else ""
                 self.txt_result.insert(
                     "end",
@@ -388,33 +396,45 @@ class App(ctk.CTk):
                     self.txt_result.insert("end", f"  • 오진 가능성: {rec.false_positive_risk}\n")
                 self.txt_result.insert("end", "\n" + "-" * 55 + "\n\n")
 
-        self.apply_comfort_tags()
+        self._apply_syntax_highlighting()
         self.txt_result.configure(state="disabled")
 
+    def _apply_syntax_highlighting(self):
+        """결과 텍스트박스에 심각도별 색상 태그를 적용합니다."""
+        textbox = self.txt_result
+
+        textbox.tag_config("critical_tag", foreground=self.color_pink)
+        textbox.tag_config("high_tag", foreground="#FF9644")
+        textbox.tag_config("warning_tag", foreground=self.color_gold)
+        textbox.tag_config("info_tag", foreground=self.color_green)
+        textbox.tag_config("sql_tag", foreground="#8FC7FF")
+
+        # 전체 텍스트를 한 번만 가져와서 패턴별로 하이라이트
+        full_text = textbox.get("1.0", "end")
+
+        highlight_rules: list[tuple[str, str]] = [
+            (r"🔴 \[CRITICAL\]", "critical_tag"),
+            (r"🟠 \[HIGH\]", "high_tag"),
+            (r"🟡 \[WARNING\]", "warning_tag"),
+            (r"🟢 \[INFO\]", "info_tag"),
+            (
+                r"CREATE\s+EXTEN.*|CREATE\s+INDEX.*?|SET\s+work_mem.*?;|ANALYZE\s+VERBOSE.*?;|SET\s+max_parallel_workers_per_gather.*?;",
+                "sql_tag",
+            ),
+        ]
+
+        for pattern, tag_name in highlight_rules:
+            for m in re.finditer(pattern, full_text, re.MULTILINE):
+                start_offset = m.start()
+                end_offset = m.end()
+                # 문자 오프셋을 tkinter 인덱스로 변환
+                start_idx = f"1.0 + {start_offset} chars"
+                end_idx = f"1.0 + {end_offset} chars"
+                textbox.tag_add(tag_name, start_idx, end_idx)
+
+    # 하위 호환용 alias
     def apply_comfort_tags(self):
-        self.txt_result.tag_config("critical_tag", foreground=self.color_pink)
-        self.txt_result.tag_config("warning_tag", foreground=self.color_gold)
-        self.txt_result.tag_config("info_tag", foreground=self.color_green)
-        self.txt_result.tag_config("sql_tag", foreground="#8FC7FF")
-
-        self.highlight_pattern(r"🔴 \[CRITICAL\]", "critical_tag")
-        self.highlight_pattern(r"🟡 \[WARNING\]", "warning_tag")
-        self.highlight_pattern(r"🟢 \[INFO\]", "info_tag")
-        self.highlight_pattern(
-            r"CREATE\s+EXTEN.*|CREATE\s+INDEX.*?|SET\s+work_mem.*?;|ANALYZE\s+VERBOSE.*?;|SET\s+max_parallel_workers_per_gather.*?;",
-            "sql_tag",
-        )
-
-    def highlight_pattern(self, pattern, tag_name):
-        start = "1.0"
-        while True:
-            pos = self.txt_result.search(pattern, start, stopindex="end", regexp=True)
-            if not pos:
-                break
-            match_len = len(re.findall(pattern, self.txt_result.get(pos, "end"))[0])
-            end = f"{pos}+{match_len}c"
-            self.txt_result.tag_add(tag_name, pos, end)
-            start = end
+        self._apply_syntax_highlighting()
 
 
 if __name__ == "__main__":

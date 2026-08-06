@@ -1,6 +1,5 @@
 import re
 from datetime import datetime, timedelta
-from typing import List, Union
 
 import sqlglot
 from sqlglot import exp

@@ -1,4 +1,3 @@
-from typing import List, Union
 from rules.base_rule import BaseRule, RuleContext
 from models.recommendation import RecommendationModel
 
@@ -15,7 +14,7 @@ class TempFileRule(BaseRule):
     def match(self, context: RuleContext, node: dict) -> bool:
         return node.get("Temp Written Blocks", 0) > 0
 
-    def analyze(self, context: RuleContext, node: dict) -> List[RecommendationModel]:
+    def analyze(self, context: RuleContext, node: dict) -> list[RecommendationModel]:
         recommendations = []
         node_type = node.get("Node Type", "Unknown Node")
         temp_write = node.get("Temp Written Blocks", 0)

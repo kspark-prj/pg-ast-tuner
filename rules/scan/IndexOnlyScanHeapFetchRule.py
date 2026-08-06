@@ -1,4 +1,3 @@
-from typing import List, Union
 
 from models.recommendation import RecommendationModel
 from rules.base_rule import BaseRule, RuleContext

@@ -1,57 +1,84 @@
 import re
 import json
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Tuple
+from typing import Any
 import psycopg
 from psycopg import sql
 import sqlglot
 from sqlglot import exp
 
+
 class PGPlanAnalyzer:
+    # 안전성 검사를 위한 위험 노드 타입 집합
+    _UNSAFE_NODE_TYPES = (
+        exp.Insert,
+        exp.Update,
+        exp.Delete,
+        exp.Drop,
+        exp.Alter,
+        exp.Create,
+        exp.TruncateTable,
+    )
+    _UNSAFE_KEYWORD_PATTERN = re.compile(
+        r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE)\b", re.IGNORECASE
+    )
+
+    # 분석 대상 노드 타입 집합 (모든 규칙의 TARGET_NODE_TYPES 합집합)
+    _PROBLEMATIC_NODE_TYPES: frozenset[str] = frozenset({
+        # Scan
+        "Seq Scan",
+        "Index Scan",
+        "Index Only Scan",
+        "Bitmap Heap Scan",
+        "CTE Scan",
+        "Subquery Scan",
+        "Foreign Scan",
+        # Join
+        "Hash Join",
+        "Nested Loop",
+        "Merge Join",
+        "Gather",
+        "Gather Merge",
+        # Sort / Aggregate
+        "Sort",
+        "Aggregate",
+        "Incremental Sort",
+        # DML (ConstraintTriggerOverheadRule, HotUpdateFailureRule 등)
+        "ModifyTable",
+        "Update",
+        "Insert",
+        "Delete",
+    })
+
     def __init__(self, conn: psycopg.Connection):
         self.conn = conn
 
     @staticmethod
     def clean_query_comments(query: str) -> str:
         query = re.sub(r"/\*.*?\*/", "", query, flags=re.DOTALL)
-        lines = query.split("\n")
-        clean_lines = []
-        for line in lines:
-            line_without_comment = re.sub(r"--.*$", "", line)
-            if line_without_comment.strip():
-                clean_lines.append(line_without_comment)
-        return "\n".join(clean_lines).strip()
+        clean_lines = [
+            re.sub(r"--.*$", "", line)
+            for line in query.split("\n")
+        ]
+        return "\n".join(line for line in clean_lines if line.strip()).strip()
 
-    def execute_explain_json(self, query: str) -> List[Dict[str, Any]]:
-        clean_sql = self.clean_query_comments(query)
-        # 안전성 검토 반영: 실제 데이터를 변조하거나 비정상 부하를 거는 DML/DDL 사전에 완전 차단
-        is_unsafe = False
+    def _is_unsafe_query(self, clean_sql: str) -> bool:
+        """SQL이 DML/DDL을 포함하는지 검사합니다 (AST 우선, 정규식 fallback)."""
         try:
             parsed = sqlglot.parse_one(clean_sql, read="postgres")
-            unsafe_nodes = (
-                exp.Insert,
-                exp.Update,
-                exp.Delete,
-                exp.Drop,
-                exp.Alter,
-                exp.Create,
-                exp.Truncate,
-            )
-            for node in parsed.find_all(unsafe_nodes):
-                is_unsafe = True
-                break
+            for _ in parsed.find_all(self._UNSAFE_NODE_TYPES):
+                return True
+            return False
         except Exception:
-            # sqlglot 파싱 실패 시 차선책으로 정규식 기반 전체 텍스트 검색 수행
-            if re.search(
-                r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE)\b",
-                clean_sql,
-                re.IGNORECASE,
-            ):
-                is_unsafe = True
+            return bool(self._UNSAFE_KEYWORD_PATTERN.search(clean_sql))
 
-        if is_unsafe:
+    def execute_explain_json(self, query: str) -> list[dict[str, Any]]:
+        clean_sql = self.clean_query_comments(query)
+        # 안전성 검토: DML/DDL 구문 사전 차단
+        if self._is_unsafe_query(clean_sql):
             raise ValueError(
-                "안전 제한: DML 또는 DDL 구문(INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/CREATE 등)은 EXPLAIN ANALYZE 성능 분석을 임의로 수행할 수 없습니다."
+                "안전 제한: DML 또는 DDL 구문(INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/CREATE 등)은 "
+                "EXPLAIN ANALYZE 성능 분석을 임의로 수행할 수 없습니다."
             )
 
         explain_query = sql.SQL("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {}").format(
@@ -147,7 +174,7 @@ class PGPlanAnalyzer:
     @staticmethod
     def extract_columns_via_ast_ordered(
         sql_query: str, target_table: str
-    ) -> Tuple[List[str], List[str], bool, bool]:
+    ) -> tuple[list[str], list[str], bool, bool]:
         """
         WHERE 조건절 컬럼과 JOIN/GROUP BY 절의 매핑 컬럼을 정밀하게 분리 추출합니다.
         실패할 경우, 정규식 기반의 Fallback 루틴으로 복원합니다.
@@ -157,8 +184,8 @@ class PGPlanAnalyzer:
 
         try:
             parsed_tree = sqlglot.parse_one(clean_sql, read="postgres")
-            alias_map = {}
-            all_tables = []
+            alias_map: dict[str, str] = {}
+            all_tables: list[str] = []
             for table_node in parsed_tree.find_all(exp.Table):
                 table_real_name = table_node.name.lower()
                 table_alias = table_node.alias.lower()
@@ -179,8 +206,8 @@ class PGPlanAnalyzer:
                     return not has_multiple_tables
 
             has_or_condition = any(parsed_tree.find_all(exp.Or))
-            where_columns = set()
-            join_group_columns = set()
+            where_columns: set[str] = set()
+            join_group_columns: set[str] = set()
 
             # 1. WHERE 절 내부 필터 컬럼 추적
             for where_clause in parsed_tree.find_all(exp.Where):
@@ -201,39 +228,29 @@ class PGPlanAnalyzer:
 
         except Exception:
             # Fallback 정규식 복원 루틴
-            where_cols = []
-            join_cols = []
+            where_cols: list[str] = []
             where_match = re.search(
                 r"where\s+(.*?)(?:group\s+by|order\s+by|limit|$)",
                 clean_sql,
                 re.IGNORECASE | re.DOTALL,
             )
             if where_match:
-                where_clause = where_match.group(1)
-                candidates = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", where_clause)
+                where_clause_text = where_match.group(1)
+                candidates = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", where_clause_text)
                 keywords = {
-                    "and",
-                    "or",
-                    "in",
-                    "is",
-                    "null",
-                    "not",
-                    "between",
-                    "like",
-                    "true",
-                    "false",
+                    "and", "or", "in", "is", "null", "not", "between", "like", "true", "false",
                 }
                 where_cols = list({c.lower() for c in candidates if c.lower() not in keywords})
 
             has_or = bool(re.search(r"\bor\b", clean_sql, re.IGNORECASE))
-            return where_cols, join_cols, True, has_or
+            return where_cols, [], True, has_or
 
-    def find_problematic_nodes(self, plan_node: Dict[str, Any]) -> List[Dict[str, Any]]:
-        nodes = []
+    def find_problematic_nodes(self, plan_node: dict[str, Any]) -> list[dict[str, Any]]:
+        """실행계획 트리를 재귀적으로 순회하여 분석 대상 노드를 수집합니다."""
+        nodes: list[dict[str, Any]] = []
         node_type = plan_node.get("Node Type")
-        if node_type in ["Seq Scan", "Sort", "Hash Join", "Nested Loop", "Index Scan"]:
+        if node_type in self._PROBLEMATIC_NODE_TYPES:
             nodes.append(plan_node)
-        if "Plans" in plan_node:
-            for sub_plan in plan_node["Plans"]:
-                nodes.extend(self.find_problematic_nodes(sub_plan))
+        for sub_plan in plan_node.get("Plans", []):
+            nodes.extend(self.find_problematic_nodes(sub_plan))
         return nodes

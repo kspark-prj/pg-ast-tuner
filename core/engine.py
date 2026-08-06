@@ -1,7 +1,7 @@
 import importlib
 import pkgutil
 import sys
-from typing import Any, Dict, List
+from typing import Any
 
 import rules
 from core.catalog import PGMetadataProvider

@@ -1,5 +1,4 @@
 import re
-from typing import List, Union
 from rules.base_rule import BaseRule, RuleContext
 from models.recommendation import RecommendationModel
 
@@ -16,7 +15,7 @@ class SortRule(BaseRule):
     def match(self, context: RuleContext, node: dict) -> bool:
         return node.get("Node Type") == "Sort"
 
-    def analyze(self, context: RuleContext, node: dict) -> List[RecommendationModel]:
+    def analyze(self, context: RuleContext, node: dict) -> list[RecommendationModel]:
         recommendations = []
         node_type = node.get("Node Type", "Sort")
         sort_method = node.get("Sort Method", "")

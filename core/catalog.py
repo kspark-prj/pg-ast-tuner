@@ -1,27 +1,30 @@
 import json
-from typing import List, Optional
+from typing import Optional
+
 from pydantic import BaseModel
 import psycopg
 from psycopg.rows import dict_row
 
+
 class IndexMetadata(BaseModel):
     index_name: str
-    columns: List[str]
+    columns: list[str]
     is_unique: bool
+
 
 class TableMetadata(BaseModel):
     table_name: str
     total_rows: int
-    indices: List[IndexMetadata]
+    indices: list[IndexMetadata]
 
     @property
-    def indexed_columns(self) -> List[str]:
-        cols = []
+    def indexed_columns(self) -> list[str]:
+        cols: list[str] = []
         for idx in self.indices:
             cols.extend(idx.columns)
         return list(set(cols))
 
-    def find_usable_index_for_cols(self, query_cols: List[str]) -> Optional[IndexMetadata]:
+    def find_usable_index_for_cols(self, query_cols: list[str]) -> Optional[IndexMetadata]:
         """
         제공된 질의 컬럼 중 하나라도 복합 인덱스의 첫 번째 선행 컬럼(Prefix)에
         매칭되는지 검사하여 복합/단일 인덱스 활용 가능 여부를 엄격하게 판별합니다.
@@ -35,6 +38,7 @@ class TableMetadata(BaseModel):
                 if first_col in query_cols_set:
                     return idx
         return None
+
 
 class PGMetadataProvider:
     def __init__(self, conn: psycopg.Connection):
@@ -65,7 +69,7 @@ class PGMetadataProvider:
             GROUP BY i.relname, ix.indisunique;
         """
         total_rows = 0
-        indices: List[IndexMetadata] = []
+        indices: list[IndexMetadata] = []
         target_table = table_name.lower().strip()
 
         with self.conn.cursor(row_factory=dict_row) as cur:

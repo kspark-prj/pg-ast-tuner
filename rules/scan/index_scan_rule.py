@@ -1,4 +1,3 @@
-from typing import List, Union
 from rules.base_rule import BaseRule, RuleContext
 from models.recommendation import RecommendationModel
 
@@ -15,7 +14,7 @@ class IndexScanRule(BaseRule):
     def match(self, context: RuleContext, node: dict) -> bool:
         return node.get("Node Type") == "Index Scan"
 
-    def analyze(self, context: RuleContext, node: dict) -> List[RecommendationModel]:
+    def analyze(self, context: RuleContext, node: dict) -> list[RecommendationModel]:
         recommendations = []
         node_type = node.get("Node Type", "Index Scan")
         table_name = node.get("Relation Name")

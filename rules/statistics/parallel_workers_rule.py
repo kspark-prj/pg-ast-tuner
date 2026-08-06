@@ -1,4 +1,3 @@
-from typing import List, Union
 from rules.base_rule import BaseRule, RuleContext
 from models.recommendation import RecommendationModel
 
@@ -16,7 +15,7 @@ class ParallelWorkersRule(BaseRule):
         node_type = str(node.get("Node Type", ""))
         return ("Parallel" in node_type or "Gather" in node_type) and node.get("Workers Planned", 0) >= 4
 
-    def analyze(self, context: RuleContext, node: dict) -> List[RecommendationModel]:
+    def analyze(self, context: RuleContext, node: dict) -> list[RecommendationModel]:
         recommendations = []
         node_type = node.get("Node Type", "Gather")
         workers = node.get("Workers Planned", 0)
