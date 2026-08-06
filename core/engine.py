@@ -42,7 +42,11 @@ class RuleEngine:
             return subclasses
 
         rule_classes = get_all_subclasses(BaseRule)
-        for rule_cls in rule_classes:
+        sorted_rule_classes = sorted(
+            rule_classes,
+            key=lambda cls: getattr(cls, "RULE_ID", cls.__name__) or cls.__name__,
+        )
+        for rule_cls in sorted_rule_classes:
             # RULE_ID가 지정되어 있고 abstract가 아닌 클래스만 인스턴스화
             if getattr(rule_cls, "RULE_ID", None) and not getattr(
                 rule_cls, "__abstractmethods__", None

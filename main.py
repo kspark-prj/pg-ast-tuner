@@ -253,8 +253,8 @@ class App(ctk.CTk):
                         recs = rule_engine.analyze_node(context, node)
                         all_recs.extend(recs)
 
-                    # 우선순위 정렬 (우선순위 수치가 작을수록 시급함)
-                    all_recs.sort(key=lambda r: r.priority)
+                    # 우선순위 정렬 (우선순위 수치가 작을수록 시급하며, 동일 우선순위에서는 rule_id 및 title로 일관되게 정렬)
+                    all_recs.sort(key=lambda r: (r.priority, r.rule_id or "", r.title or ""))
 
                     self.after(0, lambda: self.render_recommendations(raw_explain_text, all_recs))
 
