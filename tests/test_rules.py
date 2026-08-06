@@ -13,11 +13,26 @@ def test_rule_discovery():
     rule_ids = {r.RULE_ID for r in engine.rules}
     assert "RULE_SCAN_001" in rule_ids  # SeqScanRule
     assert "RULE_SCAN_002" in rule_ids  # IndexScanRule
+    assert "RULE_SCAN_003" in rule_ids  # BitmapHeapScanLossyRule
+    assert "RULE_SCAN_004" in rule_ids  # IndexOnlyScanHeapFetchRule
+    assert "RULE_SCAN_005" in rule_ids  # HighFilterRemovalRatioRule
+    assert "RULE_SCAN_006" in rule_ids  # SubqueryScanRepetitionRule
     assert "RULE_JOIN_001" in rule_ids  # HashJoinRule
     assert "RULE_JOIN_002" in rule_ids  # NestedLoopRule
+    assert "RULE_JOIN_003" in rule_ids  # MergeJoinSortRule
+    assert "RULE_JOIN_004" in rule_ids  # NestedLoopHighLoopsRule
+    assert "RULE_JOIN_005" in rule_ids  # HashJoinLargeBuildTableRule
+    assert "RULE_JOIN_006" in rule_ids  # JoinCardinalityMisestimationRule
+    assert "RULE_JOIN_007" in rule_ids  # CrossJoinRule
+    assert "RULE_JOIN_008" in rule_ids  # ParallelJoinWorkerLossRule
+    assert "RULE_JOIN_009" in rule_ids  # HashJoinBatchInflationRule
     assert "RULE_STAT_001" in rule_ids  # TempFileRule
     assert "RULE_STAT_002" in rule_ids  # ParallelWorkersRule
     assert "RULE_STAT_003" in rule_ids  # SortRule
+    assert "RULE_STAT_004" in rule_ids  # DiskHashAggRule
+    assert "RULE_STAT_005" in rule_ids  # ParallelWorkerSkewRule
+    assert "RULE_STAT_006" in rule_ids  # JITOverheadRule
+    assert "RULE_STAT_007" in rule_ids  # IncrementalSortSpillRule
 
 def test_seq_scan_small_table():
     mock_provider = MagicMock()

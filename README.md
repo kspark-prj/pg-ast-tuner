@@ -12,7 +12,7 @@
 - **SQL AST 분석 기반 지식 매핑**: `sqlglot` 파서를 통해 SQL의 논리적 구조를 완전히 분해(AST)하여, 테이블 별칭(Alias) 및 조건절에 사용된 컬럼 정보를 정확히 타겟팅합니다.
 - **시스템 카탈로그 교차 검증**: 단순히 쿼리문만 파싱하는 것에 그치지 않고, `pg_class`, `pg_index` 등 데이터베이스 시스템 카탈로그를 실시간 조회하여 인덱스 구성 상태 및 실제 데이터 테이블 크기(Row Count)를 고려한 정밀 휴리스틱 진단을 수행합니다.
 - **규칙 자동 검색(Auto-Discovery) 엔진**: 새 규칙 추가 시 `rules/` 하위에 파일만 생성하면 엔진 코드나 GUI 코드 수정 없이 동적으로 탐색되어 즉시 반영됩니다.
-- **안전한 온디맨드(On-Demand) 트랜잭션**: 분석 버튼을 누르는 즉시 연결을 맺고 완료 즉시 차단하며, `Explain (Analyze)` 등으로 인한 미세한 데이터 변경 가능성을 방지하기 위해 강제 롤백(Rollback) 세션 구조를 채택했습니다.
+- **안전한 온디맨드(On-Demand) 트랜잭션 및 이중 락다운**: 분석 버튼을 누르는 즉시 연결을 맺고 완료 즉시 차단하며, `Explain (Analyze)` 등으로 인한 데이터 변경 가능성을 방지하기 위해 강제 롤백(Rollback) 세션 구조를 채택했습니다. 또한, 기존의 정적 문자열 매칭 한계를 극복하고 **SQL AST 분석을 활용하여 CTE(WITH 절) 내의 DML/DDL 우회 시도까지 이중으로 완전 차단**합니다.
 - **스마트 주석 처리(Comment Stripper)**: 한 줄 주석(`--`) 및 인라인 블록 주석(`/* ... */`)이 섞여 있는 대용량 실무 쿼리도 에러 없이 완벽하게 정제하여 처리합니다.
 
 ---
@@ -42,6 +42,46 @@ project/
 └── tests/
     └── test_rules.py           # Pytest 기반 단위 및 탐색 통합 테스트
 ```
+
+---
+
+## 🔍 진단 규칙(Rules) 현황 (총 22종)
+
+분석 엔진은 총 22가지의 정적 및 동적 분석 휴리스틱 규칙을 탑재하고 있으며, 실행 계획 노드별 적합성을 자동 판별하여 튜닝 처방을 발행합니다.
+
+### 1. 스캔 진단 규칙 (SCAN Category)
+| 규칙 ID | 규칙 클래스명 | 진단 대상 노드 | 진단 및 권장 내용 |
+| :--- | :--- | :--- | :--- |
+| `RULE_SCAN_001` | `SeqScanRule` | Seq Scan | 풀 스캔 시 인덱스 누락, 소형 테이블 여부, OR 조건, LIKE 전방 와일드카드, 함수 가공(Index Suppression) 여부 종합 진단 |
+| `RULE_SCAN_002` | `IndexScanRule` | Index Scan | 인덱스 스캔 사용 시 인덱스 적정성 진단 (과도한 인덱스 조회 등) |
+| `RULE_SCAN_003` | `BitmapHeapScanLossyRule` | Bitmap Heap Scan | `work_mem` 부족으로 인한 비트맵 Lossy 블록 전환 및 Recheck 힙 페이지 접근 진단 |
+| `RULE_SCAN_004` | `IndexOnlyScanHeapFetchRule` | Index Only Scan | Visibility Map 미갱신으로 인한 과도한 테이블 힙 접근(Heap Fetches) 진단 |
+| `RULE_SCAN_005` | `HighFilterRemovalRatioRule` | Seq Scan, Index Scan 등 | 스캔 후 Filter 조건으로 버려지는 행(Rows Removed) 비율이 높아 발생하는 I/O 낭비 진단 (90% 이상 버려질 시) |
+| `RULE_SCAN_006` | `SubqueryScanRepetitionRule` | Subquery Scan | 상관 서브쿼리나 미튜닝 스칼라 서브쿼리가 상위 루프만큼 반복 실행(N+1 스캔 병목)되는지 진단 |
+
+### 2. 조인 진단 규칙 (JOIN Category)
+| 규칙 ID | 규칙 클래스명 | 진단 대상 노드 | 진단 및 권장 내용 |
+| :--- | :--- | :--- | :--- |
+| `RULE_JOIN_001` | `HashJoinRule` | Hash Join | 해시 테이블 빌드 크기가 `work_mem`을 초과하여 디스크로 임시 스필(Spill)되었는지 감지 |
+| `RULE_JOIN_002` | `NestedLoopRule` | Nested Loop | 내부 드라이븐 테이블(Driven Table)에 조인 키 인덱스가 없어 반복적인 풀 스캔이 유발되는지 진단 |
+| `RULE_JOIN_003` | `MergeJoinSortRule` | Merge Join | 정렬된 입력이 필요한 Merge Join에서 하위 노드에 인덱스가 없어 명시적 Sort 연산이 발생하는지 진단 |
+| `RULE_JOIN_004` | `NestedLoopHighLoopsRule` | Nested Loop | 내부 테이블 반복 탐색 횟수(Loops)가 과도하게 많아(10만회 이상) 발생하는 랜덤 I/O 및 CPU 부하 진단 |
+| `RULE_JOIN_005` | `HashJoinLargeBuildTableRule` | Hash Join | 통계 정보 불일치 등으로 인해 더 작은 집합이 아닌 대량 데이터 테이블이 해시 빌드(Build Side)로 지정되었는지 진단 |
+| `RULE_JOIN_006` | `JoinCardinalityMisestimationRule` | Hash/NL/Merge Join | 옵티마이저 예측 행 수(Plan Rows)와 실제 처리 행 수(Actual Rows) 간 10배 이상의 큰 카디널리티 오차 진단 |
+| `RULE_JOIN_007` | `CrossJoinRule` | Nested Loop, Hash Join | 조인 조건이 누락되거나 잘못 설정되어 발생하는 카티시안 곱(Cartesian Product, Cross Join) 진단 |
+| `RULE_JOIN_008` | `ParallelJoinWorkerLossRule` | Gather, Gather Merge | 병렬 조인 수행 시 계획된 워커 수보다 실제 실행 시 할당된 워커 수(Workers Launched)가 부족한 현상 진단 |
+| `RULE_JOIN_009` | `HashJoinBatchInflationRule` | Hash Join | 빌드 데이터 예측 실패로 인해 실행 중 해시 배치 수가 최초 예상보다 동적으로 폭증(8배 이상)했는지 진단 |
+
+### 3. 통계 및 리소스 진단 규칙 (STATISTICS Category)
+| 규칙 ID | 규칙 클래스명 | 진단 대상 노드 | 진단 및 권장 내용 |
+| :--- | :--- | :--- | :--- |
+| `RULE_STAT_001` | `TempFileRule` | 전체 (*) | 정렬, 해시, 그룹화 연산 중 `work_mem` 부족으로 임시 파일 쓰기(Temp Written Blocks)가 발생한 디스크 I/O 병목 진단 |
+| `RULE_STAT_002` | `ParallelWorkersRule` | 전체 (*) | 병렬 처리 및 Gather 노드 수행 시 너무 많은 워커(4개 이상)가 계획되어 가용 자원을 빠르게 소모하는 오버헤드 진단 |
+| `RULE_STAT_003` | `SortRule` | Sort | 정렬 연산 시 디스크 정렬(External Sort)이 유발되거나 LIMIT 조건 하에서 정렬 인덱스 미적용으로 대규모 Quicksort가 유발되는지 진단 |
+| `RULE_STAT_004` | `DiskHashAggRule` | Aggregate | GROUP BY/집계 연산 처리 중 메모리가 부족하여 디스크 기반 해시 집계(Disk Used > 0)가 발생했는지 감지 |
+| `RULE_STAT_005` | `ParallelWorkerSkewRule` | Gather, Gather Merge | 병렬 워커 간 데이터 처리량 차이가 5배 이상으로 한쪽 워커에 편중되어 병목이 발생하는지 감지 |
+| `RULE_STAT_006` | `JITOverheadRule` | 전체 (*) | JIT(Just-In-Time) 컴파일 작업에 총 100ms 이상의 과도한 시간이 소요되는 컴파일 오버헤드 진단 |
+| `RULE_STAT_007` | `IncrementalSortSpillRule` | Incremental Sort | 증분 정렬 수행 중 부분 정렬 메모리 한계를 초과하여 디스크 스필(Sort Space Used)이 일어나는지 진단 |
 
 ---
 

@@ -25,11 +25,33 @@ class PGPlanAnalyzer:
     def execute_explain_json(self, query: str) -> List[Dict[str, Any]]:
         clean_sql = self.clean_query_comments(query)
         # 안전성 검토 반영: 실제 데이터를 변조하거나 비정상 부하를 거는 DML/DDL 사전에 완전 차단
-        if re.match(
-            r"^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE)\b", clean_sql, re.IGNORECASE
-        ):
+        is_unsafe = False
+        try:
+            parsed = sqlglot.parse_one(clean_sql, read="postgres")
+            unsafe_nodes = (
+                exp.Insert,
+                exp.Update,
+                exp.Delete,
+                exp.Drop,
+                exp.Alter,
+                exp.Create,
+                exp.Truncate,
+            )
+            for node in parsed.find_all(unsafe_nodes):
+                is_unsafe = True
+                break
+        except Exception:
+            # sqlglot 파싱 실패 시 차선책으로 정규식 기반 전체 텍스트 검색 수행
+            if re.search(
+                r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE)\b",
+                clean_sql,
+                re.IGNORECASE,
+            ):
+                is_unsafe = True
+
+        if is_unsafe:
             raise ValueError(
-                "안전 제한: DML 또는 DDL 구문은 EXPLAIN ANALYZE 성능 분석을 임의로 수행할 수 없습니다."
+                "안전 제한: DML 또는 DDL 구문(INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/CREATE 등)은 EXPLAIN ANALYZE 성능 분석을 임의로 수행할 수 없습니다."
             )
 
         explain_query = sql.SQL("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {}").format(

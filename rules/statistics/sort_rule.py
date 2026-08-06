@@ -7,7 +7,7 @@ class SortRule(BaseRule):
     RULE_ID = "RULE_STAT_003"
     NAME = "SortRule"
     DESCRIPTION = "정렬(Sort) 연산 시 디스크 정렬(External Sort)이 유발되거나 LIMIT 조건 하에서 정렬 인덱스 미적용으로 대규모 정렬(Quicksort)이 감지되는지 분석합니다."
-    CATEGORY = "SORT"
+    CATEGORY = "STATISTICS"
     TARGET_NODE_TYPES = ["Sort"]
     SUPPORTED_PG_VERSION = ">=14"
     DEFAULT_PRIORITY = 2

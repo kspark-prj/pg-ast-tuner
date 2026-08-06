@@ -5,10 +5,10 @@ from rules.base_rule import BaseRule, RuleContext
 
 
 class IncrementalSortSpillRule(BaseRule):
-    RULE_ID = "RULE_SORT_002"
+    RULE_ID = "RULE_STAT_007"
     NAME = "IncrementalSortSpillRule"
     DESCRIPTION = "증분 정렬(Incremental Sort) 수행 중 부분 정렬 메모리 초과로 디스크 스필이 발생하는지 진단합니다."
-    CATEGORY = "SORT"
+    CATEGORY = "STATISTICS"
     TARGET_NODE_TYPES = ["Incremental Sort"]
     SUPPORTED_PG_VERSION = ">=14"
     DEFAULT_PRIORITY = 2
