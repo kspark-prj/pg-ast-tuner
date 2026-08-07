@@ -13,7 +13,7 @@ from psycopg import sql
 from psycopg.rows import dict_row
 
 # 모듈화 패키지 임포트
-from config import ConfigManager
+from config import ConfigManager, HistoryManager
 from core.catalog import PGMetadataProvider
 from core.engine import RuleEngine
 from core.parser import PGPlanAnalyzer
@@ -108,13 +108,34 @@ class App(ctk.CTk):
         left_panel.grid_rowconfigure(1, weight=1)
         left_panel.grid_columnconfigure(0, weight=1)
 
+        left_header = ctk.CTkFrame(left_panel, fg_color="transparent")
+        left_header.grid(row=0, column=0, padx=15, pady=(10, 2), sticky="ew")
+        left_header.grid_columnconfigure(0, weight=1)
+        left_header.grid_columnconfigure(1, weight=0)
+
         title_left = ctk.CTkLabel(
-            left_panel,
+            left_header,
             text="✍️ SQL Query (Ctrl + Enter로 즉시 실행)",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color=self.color_text_normal,
         )
-        title_left.grid(row=0, column=0, padx=15, pady=(10, 2), sticky="w")
+        title_left.grid(row=0, column=0, sticky="w")
+
+        self.history_menu = ctk.CTkOptionMenu(
+            left_header,
+            width=180,
+            values=["최근 쿼리 이력 없음"],
+            command=self.on_history_select,
+            fg_color="#34373C",
+            button_color="#34373C",
+            button_hover_color="#454A52",
+            dropdown_fg_color="#242629",
+            dropdown_hover_color="#454A52",
+            text_color=self.color_text_normal,
+            dropdown_text_color=self.color_text_normal,
+        )
+        self.history_menu.grid(row=0, column=1, sticky="e")
+        self.load_history_menu()
 
         self.txt_query = ctk.CTkTextbox(
             left_panel,
@@ -190,11 +211,77 @@ class App(ctk.CTk):
         ConfigManager.save_config(config_data)
         messagebox.showinfo("성공", "데이터베이스 접속 설정이 로컬 파일에 안전하게 기록되었습니다.")
 
+    def load_history_menu(self):
+        self.history_items = HistoryManager.load_history()
+        options = []
+        for item in self.history_items:
+            query_lines = [line.strip() for line in item["query"].splitlines() if line.strip()]
+            preview = " ".join(query_lines)[:25]
+            if len(" ".join(query_lines)) > 25:
+                preview += "..."
+
+            try:
+                parts = item["timestamp"].split(" ")
+                date_part = parts[0]
+                time_part = parts[1]
+                month_day = "-".join(date_part.split("-")[1:])
+                time_short = ":".join(time_part.split(":")[:2])
+                time_str = f"{month_day} {time_short}"
+            except Exception:
+                time_str = item["timestamp"]
+
+            label = f"[{time_str}] {preview}"
+            options.append(label)
+
+        if not options:
+            self.history_menu.configure(values=["최근 쿼리 이력 없음"], state="disabled")
+            self.history_menu.set("최근 쿼리 이력 없음")
+        else:
+            self.history_menu.configure(values=options, state="normal")
+            self.history_menu.set("이력 불러오기...")
+
+    def on_history_select(self, selected_label: str):
+        if selected_label in ("이력 불러오기...", "최근 쿼리 이력 없음"):
+            return
+
+        try:
+            options = []
+            for item in self.history_items:
+                query_lines = [line.strip() for line in item["query"].splitlines() if line.strip()]
+                preview = " ".join(query_lines)[:25]
+                if len(" ".join(query_lines)) > 25:
+                    preview += "..."
+                try:
+                    parts = item["timestamp"].split(" ")
+                    date_part = parts[0]
+                    time_part = parts[1]
+                    month_day = "-".join(date_part.split("-")[1:])
+                    time_short = ":".join(time_part.split(":")[:2])
+                    time_str = f"{month_day} {time_short}"
+                except Exception:
+                    time_str = item["timestamp"]
+                label = f"[{time_str}] {preview}"
+                options.append(label)
+
+            idx = options.index(selected_label)
+            full_query = self.history_items[idx]["query"]
+
+            self.txt_query.delete("1.0", "end")
+            self.txt_query.insert("1.0", full_query)
+        except Exception:
+            pass
+        finally:
+            self.history_menu.set("이력 불러오기...")
+
     def start_analysis_thread(self):
         query = self.txt_query.get("1.0", "end").strip()
         if not query:
             messagebox.showwarning("입력 필요", "분석할 SQL 질의문을 입력해 주세요.")
             return
+
+        # 쿼리 이력 저장 및 메뉴 갱신
+        HistoryManager.save_query(query)
+        self.load_history_menu()
 
         conn_params = {key: entry.get().strip() for key, entry in self.entries.items()}
         self.btn_run.configure(state="disabled", text="⏳ 분석 진행 중...")

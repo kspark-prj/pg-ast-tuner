@@ -1,0 +1,10 @@
+[
+    {
+        "timestamp": "2026-08-07 12:26:09",
+        "query": "SELECT board_id, title, writer_id, created_at\nFROM public.board\nWHERE category_id = 1\n  AND is_deleted = false\n  AND created_at >= '2026-08-01 00:00:00'\n  AND created_at < '2026-08-05 00:00:00'\nORDER BY board_id DESC"
+    },
+    {
+        "timestamp": "2026-08-07 12:25:57",
+        "query": "SELECT board_id, title, writer_id, created_at\nFROM public.board\nWHERE category_id = 1\n  AND is_deleted = false\n  AND created_at >= '2026-08-01 00:00:00'\n  AND created_at < '2026-08-05 00:00:00'\nORDER BY board_id DESC\nLIMIT 20;"
+    }
+]

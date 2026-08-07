@@ -331,7 +331,7 @@ class SeqScanRule(BaseRule):
 
             if not suppressed_detected and not front_wildcard_detected:
                 unindexed_cols = [col for col in where_cols if col not in meta.indexed_columns]
-                usable_index = meta.find_usable_index_for_cols(where_cols)
+                best_idx, best_eval = meta.find_best_index_with_score(where_cols)
 
                 if unindexed_cols:
                     # 등가(=) 조건 컬럼 선두 배치 재정렬
@@ -352,7 +352,7 @@ class SeqScanRule(BaseRule):
                             false_positive_risk="Low",
                         )
                     )
-                elif not usable_index:
+                elif not best_idx:
                     # 등가(=) 조건 컬럼 선두 배치 재정렬
                     ordered_where_cols = self._reorder_index_columns(context.raw_query, where_cols)
                     recommendations.append(
@@ -369,6 +369,23 @@ class SeqScanRule(BaseRule):
                             false_positive_risk="Low",
                         )
                     )
+                elif best_eval.get("has_skipped_prefix"):
+                    # 등가(=) 조건 컬럼 선두 배치 재정렬
+                    ordered_where_cols = self._reorder_index_columns(context.raw_query, where_cols)
+                    recommendations.append(
+                        RecommendationModel(
+                            title=f"'{table_name}' 인덱스 중간 컬럼 누락(Skipped Prefix) 감지",
+                            description=f"'{table_name}' 테이블에 인덱스 '{best_idx.index_name}'가 구성되어 있으나, WHERE 조건절에서 인덱스의 중간 컬럼이 누락되어 인덱스 검색 비효율이 극대화되고 결과적으로 전체 테이블 스캔이 선택되었습니다.",
+                            severity="CRITICAL",
+                            priority=1,
+                            reason=f"인덱스 '{best_idx.index_name}'({', '.join(best_idx.columns)})의 중간 컬럼이 조건절에 제공되지 않아, 선두 컬럼 이후의 인덱스 검색 범위 제한(Index Cond) 혜택을 받지 못하고 성능 저하가 발생합니다.",
+                            recommendation="누락된 인덱스 중간 컬럼을 WHERE 조건절에 포함하여 검색 효율을 보장하거나, 현재 쿼리 조건의 순서에 완전히 최적화된 신규 복합 인덱스를 생성하십시오.",
+                            recommended_sql=f"CREATE INDEX CONCURRENTLY idx_{table_name}_{'_'.join(ordered_where_cols)} ON {table_name} ({', '.join(ordered_where_cols)});\n",
+                            plan_node=node_type,
+                            estimated_gain="High",
+                            false_positive_risk="Low",
+                        )
+                    )
                 elif meta.total_rows > 10000:
                     selectivity = (actual_rows / meta.total_rows) if meta.total_rows > 0 else 1.0
                     if selectivity < 0.1:
@@ -378,7 +395,7 @@ class SeqScanRule(BaseRule):
                                 description=f"대용량 테이블에서 낮은 반환율({selectivity:.1%})임에도 풀 스캔이 선택되었습니다.",
                                 severity="WARNING",
                                 priority=2,
-                                reason="인덱스는 존재하나 옵티마이저가 수집 정보를 잘못 파악해 회피 중입니다.",
+                                reason=f"인덱스 '{best_idx.index_name}'가 존재하고 선행 조건도 일치하나 옵티마이저가 수집 정보를 잘못 파악해 회피 중입니다.",
                                 recommendation="테이블 통계 수집 데이터(Statistics)를 갱신하십시오.",
                                 recommended_sql=f"ANALYZE VERBOSE {table_name};",
                                 plan_node=node_type,
