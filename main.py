@@ -37,7 +37,7 @@ _SEVERITY_SYMBOLS: dict[str, str] = {
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("PostgreSQL Production-Grade Performance Tuner (AST Core)")
+        self.title("PostgreSQL Production-Grade Performance Tuner (AST Core) v1.0.0")
         self.geometry("1150x800")
 
         self.db_config = ConfigManager.load_config()
@@ -285,9 +285,7 @@ class App(ctk.CTk):
 
         conn_params = {key: entry.get().strip() for key, entry in self.entries.items()}
         self.btn_run.configure(state="disabled", text="⏳ 분석 진행 중...")
-        self._set_result_text(
-            "...데이터베이스 시스템 카탈로그 조회 및 AST 트리를 병합 분석하는 중입니다..."
-        )
+        self._set_result_text("...데이터베이스 시스템 카탈로그 조회 및 AST 트리를 병합 분석하는 중입니다...")
 
         t = threading.Thread(target=self.run_analysis, args=(query, conn_params), daemon=True)
         t.start()
@@ -381,9 +379,7 @@ class App(ctk.CTk):
                 before = query[:pos]
                 line_number = before.count("\n") + 1
                 error_preview = f"\n[오류 예상 위치: {line_number}번째 줄]\n"
-                error_preview += (
-                    f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
-                )
+                error_preview += f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
 
             self.after(
                 0,
