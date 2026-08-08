@@ -38,16 +38,16 @@ project/
 │   ├── base_rule.py            # 모든 규칙이 상속받는 Abstract Base Rule & RuleContext
 │   ├── scan/                   # SeqScanRule, IndexScanRule 등 스캔 관련 룰
 │   ├── join/                   # HashJoinRule, NestedLoopRule 등 조인 관련 룰
-│   └── statistics/             # TempFileRule, ParallelWorkersRule, SortRule 등 통계/자원 룰
+│   └── statistics/             # TempFileRule, ParallelWorkersRule, SortRule 및 메모리/구조적 진단 룰
 └── tests/
     └── test_rules.py           # Pytest 기반 단위 및 탐색 통합 테스트
 ```
 
 ---
 
-## 🔍 진단 규칙(Rules) 현황 (총 22종)
+## 🔍 진단 규칙(Rules) 현황 (총 30종)
 
-분석 엔진은 총 22가지의 정적 및 동적 분석 휴리스틱 규칙을 탑재하고 있으며, 실행 계획 노드별 적합성을 자동 판별하여 튜닝 처방을 발행합니다.
+분석 엔진은 총 30가지의 정적 및 동적 분석 휴리스틱 규칙을 탑재하고 있으며, 실행 계획 노드별 적합성을 자동 판별하여 튜닝 처방을 발행합니다.
 
 ### 1. 스캔 진단 규칙 (SCAN Category)
 | 규칙 ID | 규칙 클래스명 | 진단 대상 노드 | 진단 및 권장 내용 |
@@ -58,6 +58,8 @@ project/
 | `RULE_SCAN_004` | `IndexOnlyScanHeapFetchRule` | Index Only Scan | Visibility Map 미갱신으로 인한 과도한 테이블 힙 접근(Heap Fetches) 진단 |
 | `RULE_SCAN_005` | `HighFilterRemovalRatioRule` | Seq Scan, Index Scan 등 | 스캔 후 Filter 조건으로 버려지는 행(Rows Removed) 비율이 높아 발생하는 I/O 낭비 진단 (90% 이상 버려질 시) |
 | `RULE_SCAN_006` | `SubqueryScanRepetitionRule` | Subquery Scan | 상관 서브쿼리나 미튜닝 스칼라 서브쿼리가 상위 루프만큼 반복 실행(N+1 스캔 병목)되는지 진단 |
+| `RULE_SCAN_007` | `IndexFilterInefficiencyRule` | Index Scan, Index Only Scan | Index Cond이 아닌 Index Filter로 과도한 행이 스캔되는 비효율 진단 (선행 컬럼 Prefix Match 평가 포함) |
+| `RULE_SCAN_008` | `StaleVisibilityMapRule` | Seq Scan, Bitmap Heap Scan | 데드 튜플(Dead Tuples) 및 테이블 블로트(Bloat)로 인한 불필요한 I/O 대량 발생 진단 |
 
 ### 2. 조인 진단 규칙 (JOIN Category)
 | 규칙 ID | 규칙 클래스명 | 진단 대상 노드 | 진단 및 권장 내용 |
@@ -82,6 +84,20 @@ project/
 | `RULE_STAT_005` | `ParallelWorkerSkewRule` | Gather, Gather Merge | 병렬 워커 간 데이터 처리량 차이가 5배 이상으로 한쪽 워커에 편중되어 병목이 발생하는지 감지 |
 | `RULE_STAT_006` | `JITOverheadRule` | 전체 (*) | JIT(Just-In-Time) 컴파일 작업에 총 100ms 이상의 과도한 시간이 소요되는 컴파일 오버헤드 진단 |
 | `RULE_STAT_007` | `IncrementalSortSpillRule` | Incremental Sort | 증분 정렬 수행 중 부분 정렬 메모리 한계를 초과하여 디스크 스필(Sort Space Used)이 일어나는지 진단 |
+
+### 4. 메모리 진단 규칙 (MEMORY Category)
+| 규칙 ID | 규칙 클래스명 | 진단 대상 노드 | 진단 및 권장 내용 |
+| :--- | :--- | :--- | :--- |
+| `RULE_MEM_001` | `ExcessiveWorkMemRule` | Sort, Hash, Aggregate | 단일 연산 노드에서 지나치게 높은 `work_mem`을 할당하여 사용 중인지 진단 |
+| `RULE_MEM_002` | `BufferCacheMissRatioRule` | 전체 (*) | Shared Buffers 메모리 히트율이 낮아 실제 디스크 Read I/O 병목이 발생하는지 진단 |
+
+### 5. 구조적 진단 규칙 (STRUCTURAL Category)
+| 규칙 ID | 규칙 클래스명 | 진단 대상 노드 | 진단 및 권장 내용 |
+| :--- | :--- | :--- | :--- |
+| `RULE_STR_001` | `CTEInliningFailureRule` | CTE Scan | WITH 절(CTE) 사용 시 Materialize 되면서 인라이닝 최적화가 방해받고 있는지 진단 |
+| `RULE_STR_002` | `ForeignTableScanRule` | Foreign Scan | FDW(Foreign Data Wrapper) 원격 테이블 스캔 시 푸시다운(Pushdown) 실패로 대량 데이터가 전송되는지 진단 |
+| `RULE_STR_003` | `ConstraintTriggerOverheadRule` | ModifyTable, Insert, Update, Delete | DML(INSERT/UPDATE/DELETE) 수행 중 FK 검증 또는 트리거 실행 지연 요소 진단 |
+| `RULE_STR_004` | `HotUpdateFailureRule` | Update | UPDATE 시 HOT(Heap-Only Tuple) 최적화가 적용되지 못해 인덱스 블록 수정 오버헤드가 발생하는지 진단 |
 
 ---
 

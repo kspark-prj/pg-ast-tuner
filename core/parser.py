@@ -39,8 +39,9 @@ class PGPlanAnalyzer:
         "Merge Join",
         "Gather",
         "Gather Merge",
-        # Sort / Aggregate
+        # Sort / Aggregate / Hash
         "Sort",
+        "Hash",
         "Aggregate",
         "Incremental Sort",
         # DML (ConstraintTriggerOverheadRule, HotUpdateFailureRule 등)

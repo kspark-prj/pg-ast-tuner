@@ -33,6 +33,14 @@ def test_rule_discovery():
     assert "RULE_STAT_005" in rule_ids  # ParallelWorkerSkewRule
     assert "RULE_STAT_006" in rule_ids  # JITOverheadRule
     assert "RULE_STAT_007" in rule_ids  # IncrementalSortSpillRule
+    assert "RULE_SCAN_007" in rule_ids  # IndexFilterInefficiencyRule
+    assert "RULE_SCAN_008" in rule_ids  # StaleVisibilityMapRule
+    assert "RULE_MEM_001" in rule_ids   # ExcessiveWorkMemRule
+    assert "RULE_MEM_002" in rule_ids   # BufferCacheMissRatioRule
+    assert "RULE_STR_001" in rule_ids   # CTEInliningFailureRule
+    assert "RULE_STR_002" in rule_ids   # ForeignTableScanRule
+    assert "RULE_STR_003" in rule_ids   # ConstraintTriggerOverheadRule
+    assert "RULE_STR_004" in rule_ids   # HotUpdateFailureRule
 
 def test_seq_scan_small_table():
     mock_provider = MagicMock()
