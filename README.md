@@ -50,54 +50,59 @@ project/
 분석 엔진은 총 30가지의 정적 및 동적 분석 휴리스틱 규칙을 탑재하고 있으며, 실행 계획 노드별 적합성을 자동 판별하여 튜닝 처방을 발행합니다.
 
 ### 1. 스캔 진단 규칙 (SCAN Category)
-| 규칙 ID | 규칙 클래스명 | 진단 대상 노드 | 진단 및 권장 내용 |
-| :--- | :--- | :--- | :--- |
-| `RULE_SCAN_001` | `SeqScanRule` | Seq Scan | 풀 스캔 시 인덱스 누락, 소형 테이블 여부, OR 조건, LIKE 전방 와일드카드, 함수 가공(Index Suppression) 여부 종합 진단 |
-| `RULE_SCAN_002` | `IndexScanRule` | Index Scan | 인덱스 스캔 사용 시 인덱스 적정성 진단 (과도한 인덱스 조회 등) |
-| `RULE_SCAN_003` | `BitmapHeapScanLossyRule` | Bitmap Heap Scan | `work_mem` 부족으로 인한 비트맵 Lossy 블록 전환 및 Recheck 힙 페이지 접근 진단 |
-| `RULE_SCAN_004` | `IndexOnlyScanHeapFetchRule` | Index Only Scan | Visibility Map 미갱신으로 인한 과도한 테이블 힙 접근(Heap Fetches) 진단 |
-| `RULE_SCAN_005` | `HighFilterRemovalRatioRule` | Seq Scan, Index Scan 등 | 스캔 후 Filter 조건으로 버려지는 행(Rows Removed) 비율이 높아 발생하는 I/O 낭비 진단 (90% 이상 버려질 시) |
-| `RULE_SCAN_006` | `SubqueryScanRepetitionRule` | Subquery Scan | 상관 서브쿼리나 미튜닝 스칼라 서브쿼리가 상위 루프만큼 반복 실행(N+1 스캔 병목)되는지 진단 |
-| `RULE_SCAN_007` | `IndexFilterInefficiencyRule` | Index Scan, Index Only Scan | Index Cond이 아닌 Index Filter로 과도한 행이 스캔되는 비효율 진단 (선행 컬럼 Prefix Match 평가 포함) |
-| `RULE_SCAN_008` | `StaleVisibilityMapRule` | Seq Scan, Bitmap Heap Scan | 데드 튜플(Dead Tuples) 및 테이블 블로트(Bloat)로 인한 불필요한 I/O 대량 발생 진단 |
+
+| 규칙 ID         | 규칙 클래스명                 | 진단 대상 노드              | 진단 및 권장 내용                                                                                                    |
+| :-------------- | :---------------------------- | :-------------------------- | :------------------------------------------------------------------------------------------------------------------- |
+| `RULE_SCAN_001` | `SeqScanRule`                 | Seq Scan                    | 풀 스캔 시 인덱스 누락, 소형 테이블 여부, OR 조건, LIKE 전방 와일드카드, 함수 가공(Index Suppression) 여부 종합 진단 |
+| `RULE_SCAN_002` | `IndexScanRule`               | Index Scan                  | 인덱스 스캔 사용 시 인덱스 적정성 진단 (과도한 인덱스 조회 등)                                                       |
+| `RULE_SCAN_003` | `BitmapHeapScanLossyRule`     | Bitmap Heap Scan            | `work_mem` 부족으로 인한 비트맵 Lossy 블록 전환 및 Recheck 힙 페이지 접근 진단                                       |
+| `RULE_SCAN_004` | `IndexOnlyScanHeapFetchRule`  | Index Only Scan             | Visibility Map 미갱신으로 인한 과도한 테이블 힙 접근(Heap Fetches) 진단                                              |
+| `RULE_SCAN_005` | `HighFilterRemovalRatioRule`  | Seq Scan, Index Scan 등     | 스캔 후 Filter 조건으로 버려지는 행(Rows Removed) 비율이 높아 발생하는 I/O 낭비 진단 (90% 이상 버려질 시)            |
+| `RULE_SCAN_006` | `SubqueryScanRepetitionRule`  | Subquery Scan               | 상관 서브쿼리나 미튜닝 스칼라 서브쿼리가 상위 루프만큼 반복 실행(N+1 스캔 병목)되는지 진단                           |
+| `RULE_SCAN_007` | `IndexFilterInefficiencyRule` | Index Scan, Index Only Scan | Index Cond이 아닌 Index Filter로 과도한 행이 스캔되는 비효율 진단 (선행 컬럼 Prefix Match 평가 포함)                 |
+| `RULE_SCAN_008` | `StaleVisibilityMapRule`      | Seq Scan, Bitmap Heap Scan  | 데드 튜플(Dead Tuples) 및 테이블 블로트(Bloat)로 인한 불필요한 I/O 대량 발생 진단                                    |
 
 ### 2. 조인 진단 규칙 (JOIN Category)
-| 규칙 ID | 규칙 클래스명 | 진단 대상 노드 | 진단 및 권장 내용 |
-| :--- | :--- | :--- | :--- |
-| `RULE_JOIN_001` | `HashJoinRule` | Hash Join | 해시 테이블 빌드 크기가 `work_mem`을 초과하여 디스크로 임시 스필(Spill)되었는지 감지 |
-| `RULE_JOIN_002` | `NestedLoopRule` | Nested Loop | 내부 드라이븐 테이블(Driven Table)에 조인 키 인덱스가 없어 반복적인 풀 스캔이 유발되는지 진단 |
-| `RULE_JOIN_003` | `MergeJoinSortRule` | Merge Join | 정렬된 입력이 필요한 Merge Join에서 하위 노드에 인덱스가 없어 명시적 Sort 연산이 발생하는지 진단 |
-| `RULE_JOIN_004` | `NestedLoopHighLoopsRule` | Nested Loop | 내부 테이블 반복 탐색 횟수(Loops)가 과도하게 많아(10만회 이상) 발생하는 랜덤 I/O 및 CPU 부하 진단 |
-| `RULE_JOIN_005` | `HashJoinLargeBuildTableRule` | Hash Join | 통계 정보 불일치 등으로 인해 더 작은 집합이 아닌 대량 데이터 테이블이 해시 빌드(Build Side)로 지정되었는지 진단 |
-| `RULE_JOIN_006` | `JoinCardinalityMisestimationRule` | Hash/NL/Merge Join | 옵티마이저 예측 행 수(Plan Rows)와 실제 처리 행 수(Actual Rows) 간 10배 이상의 큰 카디널리티 오차 진단 |
-| `RULE_JOIN_007` | `CrossJoinRule` | Nested Loop, Hash Join | 조인 조건이 누락되거나 잘못 설정되어 발생하는 카티시안 곱(Cartesian Product, Cross Join) 진단 |
-| `RULE_JOIN_008` | `ParallelJoinWorkerLossRule` | Gather, Gather Merge | 병렬 조인 수행 시 계획된 워커 수보다 실제 실행 시 할당된 워커 수(Workers Launched)가 부족한 현상 진단 |
-| `RULE_JOIN_009` | `HashJoinBatchInflationRule` | Hash Join | 빌드 데이터 예측 실패로 인해 실행 중 해시 배치 수가 최초 예상보다 동적으로 폭증(8배 이상)했는지 진단 |
+
+| 규칙 ID         | 규칙 클래스명                      | 진단 대상 노드         | 진단 및 권장 내용                                                                                               |
+| :-------------- | :--------------------------------- | :--------------------- | :-------------------------------------------------------------------------------------------------------------- |
+| `RULE_JOIN_001` | `HashJoinRule`                     | Hash Join              | 해시 테이블 빌드 크기가 `work_mem`을 초과하여 디스크로 임시 스필(Spill)되었는지 감지                            |
+| `RULE_JOIN_002` | `NestedLoopRule`                   | Nested Loop            | 내부 드라이븐 테이블(Driven Table)에 조인 키 인덱스가 없어 반복적인 풀 스캔이 유발되는지 진단                   |
+| `RULE_JOIN_003` | `MergeJoinSortRule`                | Merge Join             | 정렬된 입력이 필요한 Merge Join에서 하위 노드에 인덱스가 없어 명시적 Sort 연산이 발생하는지 진단                |
+| `RULE_JOIN_004` | `NestedLoopHighLoopsRule`          | Nested Loop            | 내부 테이블 반복 탐색 횟수(Loops)가 과도하게 많아(10만회 이상) 발생하는 랜덤 I/O 및 CPU 부하 진단               |
+| `RULE_JOIN_005` | `HashJoinLargeBuildTableRule`      | Hash Join              | 통계 정보 불일치 등으로 인해 더 작은 집합이 아닌 대량 데이터 테이블이 해시 빌드(Build Side)로 지정되었는지 진단 |
+| `RULE_JOIN_006` | `JoinCardinalityMisestimationRule` | Hash/NL/Merge Join     | 옵티마이저 예측 행 수(Plan Rows)와 실제 처리 행 수(Actual Rows) 간 10배 이상의 큰 카디널리티 오차 진단          |
+| `RULE_JOIN_007` | `CrossJoinRule`                    | Nested Loop, Hash Join | 조인 조건이 누락되거나 잘못 설정되어 발생하는 카티시안 곱(Cartesian Product, Cross Join) 진단                   |
+| `RULE_JOIN_008` | `ParallelJoinWorkerLossRule`       | Gather, Gather Merge   | 병렬 조인 수행 시 계획된 워커 수보다 실제 실행 시 할당된 워커 수(Workers Launched)가 부족한 현상 진단           |
+| `RULE_JOIN_009` | `HashJoinBatchInflationRule`       | Hash Join              | 빌드 데이터 예측 실패로 인해 실행 중 해시 배치 수가 최초 예상보다 동적으로 폭증(8배 이상)했는지 진단            |
 
 ### 3. 통계 및 리소스 진단 규칙 (STATISTICS Category)
-| 규칙 ID | 규칙 클래스명 | 진단 대상 노드 | 진단 및 권장 내용 |
-| :--- | :--- | :--- | :--- |
-| `RULE_STAT_001` | `TempFileRule` | 전체 (*) | 정렬, 해시, 그룹화 연산 중 `work_mem` 부족으로 임시 파일 쓰기(Temp Written Blocks)가 발생한 디스크 I/O 병목 진단 |
-| `RULE_STAT_002` | `ParallelWorkersRule` | 전체 (*) | 병렬 처리 및 Gather 노드 수행 시 너무 많은 워커(4개 이상)가 계획되어 가용 자원을 빠르게 소모하는 오버헤드 진단 |
-| `RULE_STAT_003` | `SortRule` | Sort | 정렬 연산 시 디스크 정렬(External Sort)이 유발되거나 LIMIT 조건 하에서 정렬 인덱스 미적용으로 대규모 Quicksort가 유발되는지 진단 |
-| `RULE_STAT_004` | `DiskHashAggRule` | Aggregate | GROUP BY/집계 연산 처리 중 메모리가 부족하여 디스크 기반 해시 집계(Disk Used > 0)가 발생했는지 감지 |
-| `RULE_STAT_005` | `ParallelWorkerSkewRule` | Gather, Gather Merge | 병렬 워커 간 데이터 처리량 차이가 5배 이상으로 한쪽 워커에 편중되어 병목이 발생하는지 감지 |
-| `RULE_STAT_006` | `JITOverheadRule` | 전체 (*) | JIT(Just-In-Time) 컴파일 작업에 총 100ms 이상의 과도한 시간이 소요되는 컴파일 오버헤드 진단 |
-| `RULE_STAT_007` | `IncrementalSortSpillRule` | Incremental Sort | 증분 정렬 수행 중 부분 정렬 메모리 한계를 초과하여 디스크 스필(Sort Space Used)이 일어나는지 진단 |
+
+| 규칙 ID         | 규칙 클래스명              | 진단 대상 노드       | 진단 및 권장 내용                                                                                                                |
+| :-------------- | :------------------------- | :------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
+| `RULE_STAT_001` | `TempFileRule`             | 전체 (\*)            | 정렬, 해시, 그룹화 연산 중 `work_mem` 부족으로 임시 파일 쓰기(Temp Written Blocks)가 발생한 디스크 I/O 병목 진단                 |
+| `RULE_STAT_002` | `ParallelWorkersRule`      | 전체 (\*)            | 병렬 처리 및 Gather 노드 수행 시 너무 많은 워커(4개 이상)가 계획되어 가용 자원을 빠르게 소모하는 오버헤드 진단                   |
+| `RULE_STAT_003` | `SortRule`                 | Sort                 | 정렬 연산 시 디스크 정렬(External Sort)이 유발되거나 LIMIT 조건 하에서 정렬 인덱스 미적용으로 대규모 Quicksort가 유발되는지 진단 |
+| `RULE_STAT_004` | `DiskHashAggRule`          | Aggregate            | GROUP BY/집계 연산 처리 중 메모리가 부족하여 디스크 기반 해시 집계(Disk Used > 0)가 발생했는지 감지                              |
+| `RULE_STAT_005` | `ParallelWorkerSkewRule`   | Gather, Gather Merge | 병렬 워커 간 데이터 처리량 차이가 5배 이상으로 한쪽 워커에 편중되어 병목이 발생하는지 감지                                       |
+| `RULE_STAT_006` | `JITOverheadRule`          | 전체 (\*)            | JIT(Just-In-Time) 컴파일 작업에 총 100ms 이상의 과도한 시간이 소요되는 컴파일 오버헤드 진단                                      |
+| `RULE_STAT_007` | `IncrementalSortSpillRule` | Incremental Sort     | 증분 정렬 수행 중 부분 정렬 메모리 한계를 초과하여 디스크 스필(Sort Space Used)이 일어나는지 진단                                |
 
 ### 4. 메모리 진단 규칙 (MEMORY Category)
-| 규칙 ID | 규칙 클래스명 | 진단 대상 노드 | 진단 및 권장 내용 |
-| :--- | :--- | :--- | :--- |
-| `RULE_MEM_001` | `ExcessiveWorkMemRule` | Sort, Hash, Aggregate | 단일 연산 노드에서 지나치게 높은 `work_mem`을 할당하여 사용 중인지 진단 |
-| `RULE_MEM_002` | `BufferCacheMissRatioRule` | 전체 (*) | Shared Buffers 메모리 히트율이 낮아 실제 디스크 Read I/O 병목이 발생하는지 진단 |
+
+| 규칙 ID        | 규칙 클래스명              | 진단 대상 노드        | 진단 및 권장 내용                                                               |
+| :------------- | :------------------------- | :-------------------- | :------------------------------------------------------------------------------ |
+| `RULE_MEM_001` | `ExcessiveWorkMemRule`     | Sort, Hash, Aggregate | 단일 연산 노드에서 지나치게 높은 `work_mem`을 할당하여 사용 중인지 진단         |
+| `RULE_MEM_002` | `BufferCacheMissRatioRule` | 전체 (\*)             | Shared Buffers 메모리 히트율이 낮아 실제 디스크 Read I/O 병목이 발생하는지 진단 |
 
 ### 5. 구조적 진단 규칙 (STRUCTURAL Category)
-| 규칙 ID | 규칙 클래스명 | 진단 대상 노드 | 진단 및 권장 내용 |
-| :--- | :--- | :--- | :--- |
-| `RULE_STR_001` | `CTEInliningFailureRule` | CTE Scan | WITH 절(CTE) 사용 시 Materialize 되면서 인라이닝 최적화가 방해받고 있는지 진단 |
-| `RULE_STR_002` | `ForeignTableScanRule` | Foreign Scan | FDW(Foreign Data Wrapper) 원격 테이블 스캔 시 푸시다운(Pushdown) 실패로 대량 데이터가 전송되는지 진단 |
-| `RULE_STR_003` | `ConstraintTriggerOverheadRule` | ModifyTable, Insert, Update, Delete | DML(INSERT/UPDATE/DELETE) 수행 중 FK 검증 또는 트리거 실행 지연 요소 진단 |
-| `RULE_STR_004` | `HotUpdateFailureRule` | Update | UPDATE 시 HOT(Heap-Only Tuple) 최적화가 적용되지 못해 인덱스 블록 수정 오버헤드가 발생하는지 진단 |
+
+| 규칙 ID        | 규칙 클래스명                   | 진단 대상 노드                      | 진단 및 권장 내용                                                                                     |
+| :------------- | :------------------------------ | :---------------------------------- | :---------------------------------------------------------------------------------------------------- |
+| `RULE_STR_001` | `CTEInliningFailureRule`        | CTE Scan                            | WITH 절(CTE) 사용 시 Materialize 되면서 인라이닝 최적화가 방해받고 있는지 진단                        |
+| `RULE_STR_002` | `ForeignTableScanRule`          | Foreign Scan                        | FDW(Foreign Data Wrapper) 원격 테이블 스캔 시 푸시다운(Pushdown) 실패로 대량 데이터가 전송되는지 진단 |
+| `RULE_STR_003` | `ConstraintTriggerOverheadRule` | ModifyTable, Insert, Update, Delete | DML(INSERT/UPDATE/DELETE) 수행 중 FK 검증 또는 트리거 실행 지연 요소 진단                             |
+| `RULE_STR_004` | `HotUpdateFailureRule`          | Update                              | UPDATE 시 HOT(Heap-Only Tuple) 최적화가 적용되지 못해 인덱스 블록 수정 오버헤드가 발생하는지 진단     |
 
 ---
 
@@ -241,6 +246,6 @@ python -m PyInstaller main.spec
 Spec 파일 없이 명령어로 직접 빌드하는 경우, `psycopg` 모듈의 동적 바인딩 파일들을 수집하도록 `--collect-all` 옵션을 반드시 포함해야 합니다.
 
 ```bash
-python -m PyInstaller --clean --noconfirm -w -F --icon=main.ico --exclude-module PIL --exclude-module Pillow --collect-all psycopg --collect-all sqlglot --collect-all rules main.py
+python -m PyInstaller --clean --noconfirm -w -D --icon=main.ico --collect-all psycopg --collect-all sqlglot --collect-all rules --exclude-module PIL --exclude-module Pillow --exclude-module pytest --exclude-module matplotlib --exclude-module tkinter.test --exclude-module PyQt5 --exclude-module PyQt6 --exclude-module PySide2 --exclude-module PySide6 --exclude-module scipy --exclude-module pandas --exclude-module IPython --exclude-module notebook --exclude-module tornado main.py
 
 ```
