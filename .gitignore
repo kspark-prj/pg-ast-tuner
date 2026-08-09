@@ -29,5 +29,5 @@ Thumbs.db
 venv/
 .venv/
 env/
-
+query_history.json
 

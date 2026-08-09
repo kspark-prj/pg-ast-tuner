@@ -1,14 +1,15 @@
 import json
+import os
 import re
+import sys
 import threading
-import tkinter as tk
-from tkinter import messagebox
 from typing import Any
 
 import customtkinter as ctk
 
 # 핵심 라이브러리
 import psycopg
+from PIL import Image
 from psycopg import sql
 from psycopg.rows import dict_row
 
@@ -20,12 +21,94 @@ from core.parser import PGPlanAnalyzer
 from models.recommendation import RecommendationModel
 from rules.base_rule import RuleContext
 
+
+# ==========================================
+# 리소스 경로 헬퍼 (PyInstaller EXE 빌드 대응)
+# ==========================================
+def get_resource_path(relative_path: str) -> str:
+    """PyInstaller 번들 내부 파일 또는 일반 실행 시의 상대 경로 반환"""
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
+
+# ==========================================
+# 스플래시 윈도우 클래스 (CTkToplevel)
+# ==========================================
+class SplashScreen(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+
+        self.width = 600
+        self.height = 350
+
+        # OS 타이틀바 제거
+        self.overrideredirect(True)
+
+        # 화면 중앙 배치 계산
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        x = (screen_width - self.width) // 2
+        y = (screen_height - self.height) // 2
+        self.geometry(f"{self.width}x{self.height}+{x}+{y}")
+
+        # 최상단에 표시 & 배경색 지정
+        self.attributes("-topmost", True)
+        self.configure(fg_color="#1C1D1F")
+
+        # 1. 이미지 영역 (상단 ~280px)
+        image_path = get_resource_path("splash.png")
+        if os.path.exists(image_path):
+            pil_img = Image.open(image_path)
+            self.splash_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(600, 280))
+            self.lbl_image = ctk.CTkLabel(self, image=self.splash_img, text="")
+            self.lbl_image.pack(side="top", fill="both", expand=True)
+        else:
+            self.lbl_image = ctk.CTkLabel(
+                self,
+                text="PostgreSQL Performance Tuner",
+                font=ctk.CTkFont(size=22, weight="bold"),
+                text_color="#D8DEE9",
+            )
+            self.lbl_image.pack(side="top", fill="both", expand=True, pady=80)
+
+        # 2. 하단 로딩 바 영역 (하단 70px)
+        self.bottom_frame = ctk.CTkFrame(self, fg_color="#18191A", height=70, corner_radius=0)
+        self.bottom_frame.pack(side="bottom", fill="x")
+
+        self.lbl_status = ctk.CTkLabel(
+            self.bottom_frame,
+            text="애플리케이션을 초기화하는 중입니다...",
+            font=ctk.CTkFont(size=11),
+            text_color="#9299A6",
+        )
+        self.lbl_status.pack(anchor="w", padx=20, pady=(8, 2))
+
+        self.progress_bar = ctk.CTkProgressBar(
+            self.bottom_frame,
+            width=560,
+            height=10,
+            progress_color="#2F5C8F",
+            fg_color="#2E3033",
+        )
+        self.progress_bar.pack(padx=20, pady=(2, 12))
+        self.progress_bar.set(0.0)
+
+        self.update_idletasks()
+
+    def set_progress(self, value: float, status_text: str = ""):
+        """진행 상황(0.0 ~ 1.0)과 텍스트 상태를 안전하게 갱신합니다."""
+        self.progress_bar.set(value)
+        if status_text:
+            self.lbl_status.configure(text=status_text)
+        self.update_idletasks()
+
+
 # ==========================================
 # 상용 GUI 애플리케이션 (CustomTkinter)
 # ==========================================
 
-# severity -> 심볼 매핑 (렌더링 공통 사용)
-# HIGH는 WARNING과 CRITICAL 사이의 심각도로, WARNING과 동일한 심볼로 표시합니다.
 _SEVERITY_SYMBOLS: dict[str, str] = {
     "CRITICAL": "🔴",
     "HIGH": "🟠",
@@ -37,13 +120,21 @@ _SEVERITY_SYMBOLS: dict[str, str] = {
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
+
+        # 메인 창 숨김
+        self.withdraw()
+
+        # 단일 스플래시 창 생성
+        self.splash = SplashScreen(self)
+
+        # 비동기 로딩 시퀀스 시작 (time.sleep 대신 after 사용)
+        self.after(100, self._load_step_1)
+
+    def _load_step_1(self):
+        self.splash.set_progress(0.25, "시스템 접속 환경 설정 로딩 중...")
         self.title("PostgreSQL Production-Grade Performance Tuner (AST Core) v1.0.0")
         self.geometry("1150x800")
-
         self.db_config = ConfigManager.load_config()
-
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
 
         self.color_bg_dark = "#1C1D1F"
         self.color_text_normal = "#D8DEE9"
@@ -52,8 +143,27 @@ class App(ctk.CTk):
         self.color_gold = "#F4D35E"
         self.color_pink = "#F97B7D"
 
+        self.after(300, self._load_step_2)
+
+    def _load_step_2(self):
+        self.splash.set_progress(0.60, "UI 컨트롤 및 모듈 생성 중...")
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
         self.create_header_frame()
         self.create_workspace()
+
+        self.after(300, self._load_step_3)
+
+    def _load_step_3(self):
+        self.splash.set_progress(1.0, "초기화 완료! 메인 화면을 열고 있습니다...")
+        self.after(200, self._finish_loading)
+
+    def _finish_loading(self):
+        # 스플래시 닫고 메인 화면 활성화
+        self.splash.destroy()
+        self.deiconify()
+        self.focus_force()
 
     def create_header_frame(self):
         self.header_frame = ctk.CTkFrame(self, corner_radius=8, fg_color="#242629")
@@ -148,10 +258,7 @@ class App(ctk.CTk):
         self.txt_query.grid(row=1, column=0, padx=15, pady=10, sticky="nsew")
         self.txt_query.insert(
             "1.0",
-            """SELECT *
-    FROM test_orders
-    WHERE order_status = 'PENDING'
-    AND order_amount > 500.00;""",
+            """SELECT * FROM test_orders WHERE UPPER(status) = 'ACTIVE';""",
         )
 
         try:
@@ -209,6 +316,8 @@ class App(ctk.CTk):
     def save_config(self):
         config_data = {key: entry.get().strip() for key, entry in self.entries.items()}
         ConfigManager.save_config(config_data)
+        from tkinter import messagebox
+
         messagebox.showinfo("성공", "데이터베이스 접속 설정이 로컬 파일에 안전하게 기록되었습니다.")
 
     def load_history_menu(self):
@@ -276,16 +385,19 @@ class App(ctk.CTk):
     def start_analysis_thread(self):
         query = self.txt_query.get("1.0", "end").strip()
         if not query:
+            from tkinter import messagebox
+
             messagebox.showwarning("입력 필요", "분석할 SQL 질의문을 입력해 주세요.")
             return
 
-        # 쿼리 이력 저장 및 메뉴 갱신
         HistoryManager.save_query(query)
         self.load_history_menu()
 
         conn_params = {key: entry.get().strip() for key, entry in self.entries.items()}
         self.btn_run.configure(state="disabled", text="⏳ 분석 진행 중...")
-        self._set_result_text("...데이터베이스 시스템 카탈로그 조회 및 AST 트리를 병합 분석하는 중입니다...")
+        self._set_result_text(
+            "...데이터베이스 시스템 카탈로그 조회 및 AST 트리를 병합 분석하는 중입니다..."
+        )
 
         t = threading.Thread(target=self.run_analysis, args=(query, conn_params), daemon=True)
         t.start()
@@ -326,7 +438,9 @@ class App(ctk.CTk):
                     if not explain_data:
                         self.after(
                             0,
-                            lambda: self._set_result_text("[안내] 수집된 실행계획 정보가 비어 있습니다."),
+                            lambda: self._set_result_text(
+                                "[안내] 수집된 실행계획 정보가 비어 있습니다."
+                            ),
                         )
                         return
 
@@ -345,10 +459,18 @@ class App(ctk.CTk):
                     for node in target_nodes:
                         all_recs.extend(rule_engine.analyze_node(context, node))
 
-                    # 우선순위 정렬 (우선순위 수치가 작을수록 시급하며, 동일 우선순위에서는 rule_id 및 title로 일관되게 정렬)
-                    all_recs.sort(key=lambda r: (r.priority, r.rule_id or "", r.title or ""))
+                    all_recs.sort(
+                        key=lambda r: (
+                            r.priority,
+                            r.rule_id or "",
+                            r.title or "",
+                        )
+                    )
 
-                    self.after(0, lambda: self.render_recommendations(raw_explain_text, all_recs))
+                    self.after(
+                        0,
+                        lambda: self.render_recommendations(raw_explain_text, all_recs),
+                    )
 
                 finally:
                     conn.rollback()
@@ -357,8 +479,7 @@ class App(ctk.CTk):
             self.after(
                 0,
                 lambda error_val=err: self._set_result_text_colored(
-                    f"❌ [안전 경고]\n\n{error_val!s}",
-                    self.color_pink,
+                    f"❌ [안전 경고]\n\n{error_val!s}", self.color_pink
                 ),
             )
         except psycopg.errors.QueryCanceled as err:
@@ -379,7 +500,9 @@ class App(ctk.CTk):
                 before = query[:pos]
                 line_number = before.count("\n") + 1
                 error_preview = f"\n[오류 예상 위치: {line_number}번째 줄]\n"
-                error_preview += f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
+                error_preview += (
+                    f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
+                )
 
             self.after(
                 0,
@@ -420,25 +543,16 @@ class App(ctk.CTk):
         self.btn_run.configure(state="normal", text="⚡ AST & Heuristics 분석 실행")
 
     def _set_result_text(self, text: str):
-        """결과 박스에 일반 텍스트를 출력합니다."""
         self.txt_result.configure(state="normal", text_color=self.color_text_normal)
         self.txt_result.delete("1.0", "end")
         self.txt_result.insert("1.0", text)
         self.txt_result.configure(state="disabled")
 
     def _set_result_text_colored(self, text: str, text_color: str):
-        """결과 박스에 지정된 색상으로 텍스트를 출력합니다."""
         self.txt_result.configure(state="normal", text_color=text_color)
         self.txt_result.delete("1.0", "end")
         self.txt_result.insert("1.0", text)
         self.txt_result.configure(state="disabled")
-
-    # 하위 호환용 alias (기존 코드 호환성 유지)
-    def update_result_box(self, text: str):
-        self._set_result_text(text)
-
-    def update_result_box_custom(self, text: str, text_color: str):
-        self._set_result_text_colored(text, text_color)
 
     def render_recommendations(self, raw_explain: str, recs: list[RecommendationModel]):
         self.txt_result.configure(state="normal")
@@ -483,7 +597,6 @@ class App(ctk.CTk):
         self.txt_result.configure(state="disabled")
 
     def _apply_syntax_highlighting(self):
-        """결과 텍스트박스에 심각도별 색상 태그를 적용합니다."""
         textbox = self.txt_result
 
         textbox.tag_config("critical_tag", foreground=self.color_pink)
@@ -492,7 +605,6 @@ class App(ctk.CTk):
         textbox.tag_config("info_tag", foreground=self.color_green)
         textbox.tag_config("sql_tag", foreground="#8FC7FF")
 
-        # 전체 텍스트를 한 번만 가져와서 패턴별로 하이라이트
         full_text = textbox.get("1.0", "end")
 
         highlight_rules: list[tuple[str, str]] = [
@@ -510,14 +622,9 @@ class App(ctk.CTk):
             for m in re.finditer(pattern, full_text, re.MULTILINE):
                 start_offset = m.start()
                 end_offset = m.end()
-                # 문자 오프셋을 tkinter 인덱스로 변환
                 start_idx = f"1.0 + {start_offset} chars"
                 end_idx = f"1.0 + {end_offset} chars"
                 textbox.tag_add(tag_name, start_idx, end_idx)
-
-    # 하위 호환용 alias
-    def apply_comfort_tags(self):
-        self._apply_syntax_highlighting()
 
 
 if __name__ == "__main__":
