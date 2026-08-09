@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import threading
+from tkinter import messagebox, simpledialog
 from typing import Any
 
 import customtkinter as ctk
@@ -73,9 +74,7 @@ class SplashScreen(ctk.CTkToplevel):
         image_path = get_resource_path("splash.png")
         if os.path.exists(image_path):
             pil_img = Image.open(image_path)
-            self.splash_img = ctk.CTkImage(
-                light_image=pil_img, dark_image=pil_img, size=(self.img_width, self.img_height)
-            )
+            self.splash_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(self.img_width, self.img_height))
             self.lbl_image = ctk.CTkLabel(self, image=self.splash_img, text="")
             self.lbl_image.pack(side="top", fill="both", expand=True)
         else:
@@ -89,9 +88,7 @@ class SplashScreen(ctk.CTkToplevel):
             self.lbl_image.pack(side="top", fill="both", expand=True)
 
         # 3. 이미지 아래 하단 프로그래스 바 영역 (하단 60px)
-        self.bottom_frame = ctk.CTkFrame(
-            self, fg_color="#18191A", height=self.bar_height, corner_radius=0
-        )
+        self.bottom_frame = ctk.CTkFrame(self, fg_color="#18191A", height=self.bar_height, corner_radius=0)
         self.bottom_frame.pack(side="bottom", fill="x")
 
         self.lbl_status = ctk.CTkLabel(
@@ -287,7 +284,7 @@ class App(ctk.CTk):
         self.txt_query.grid(row=1, column=0, padx=15, pady=10, sticky="nsew")
         self.txt_query.insert(
             "1.0",
-            """SELECT * FROM test_orders WHERE UPPER(status) = 'ACTIVE';""",
+            """SELECT * FROM test_orders WHERE UPPER(order_status) = 'ACTIVE';""",
         )
 
         try:
@@ -297,6 +294,12 @@ class App(ctk.CTk):
 
         self.txt_query.bind("<Control-Return>", self.trigger_shortcut_run)
         self.txt_query.bind("<Command-Return>", self.trigger_shortcut_run)
+
+        # 쿼리 입력창 Ctrl+F, Cmd+F 검색 바인딩
+        self.txt_query.bind("<Control-f>", lambda e: self.open_search_dialog(self.txt_query))
+        self.txt_query.bind("<Control-F>", lambda e: self.open_search_dialog(self.txt_query))
+        self.txt_query.bind("<Command-f>", lambda e: self.open_search_dialog(self.txt_query))
+        self.txt_query.bind("<Command-F>", lambda e: self.open_search_dialog(self.txt_query))
 
         self.btn_run = ctk.CTkButton(
             left_panel,
@@ -338,6 +341,38 @@ class App(ctk.CTk):
         except Exception:
             pass
 
+        # 결과창 Ctrl+F, Cmd+F 검색 바인딩
+        self.txt_result.bind("<Control-f>", lambda e: self.open_search_dialog(self.txt_result))
+        self.txt_result.bind("<Control-F>", lambda e: self.open_search_dialog(self.txt_result))
+        self.txt_result.bind("<Command-f>", lambda e: self.open_search_dialog(self.txt_result))
+        self.txt_result.bind("<Command-F>", lambda e: self.open_search_dialog(self.txt_result))
+
+    # ==========================================
+    # Ctrl+F 검색 시 하이라이트/알림창 없이 포커스 이동만 수행
+    # ==========================================
+    def open_search_dialog(self, target_textbox: ctk.CTkTextbox):
+        keyword = simpledialog.askstring("찾기", "검색할 단어를 입력하세요:", parent=self)
+        if not keyword:
+            return "break"
+
+        # 내부 tkinter Text 위젯 참조
+        inner_text = target_textbox._textbox
+
+        # 현재 커서 위치부터 검색 (대소문자 구별 없음)
+        pos = inner_text.search(keyword, "insert", stopindex="end", nocase=True)
+
+        # 현재 위치 이후에 없으면 문서 처음부터 재검색 (Wrap Search)
+        if not pos:
+            pos = inner_text.search(keyword, "1.0", stopindex="end", nocase=True)
+
+        if pos:
+            # 발견된 단어 위치로 스크롤 및 커서 이동
+            inner_text.see(pos)
+            inner_text.mark_set("insert", pos)
+            target_textbox.focus_set()
+
+        return "break"
+
     def trigger_shortcut_run(self, event):
         self.start_analysis_thread()
         return "break"
@@ -345,7 +380,6 @@ class App(ctk.CTk):
     def save_config(self):
         config_data = {key: entry.get().strip() for key, entry in self.entries.items()}
         ConfigManager.save_config(config_data)
-        from tkinter import messagebox
 
         messagebox.showinfo("성공", "데이터베이스 접속 설정이 로컬 파일에 안전하게 기록되었습니다.")
 
@@ -414,8 +448,6 @@ class App(ctk.CTk):
     def start_analysis_thread(self):
         query = self.txt_query.get("1.0", "end").strip()
         if not query:
-            from tkinter import messagebox
-
             messagebox.showwarning("입력 필요", "분석할 SQL 질의문을 입력해 주세요.")
             return
 
@@ -424,9 +456,7 @@ class App(ctk.CTk):
 
         conn_params = {key: entry.get().strip() for key, entry in self.entries.items()}
         self.btn_run.configure(state="disabled", text="⏳ 분석 진행 중...")
-        self._set_result_text(
-            "...데이터베이스 시스템 카탈로그 조회 및 AST 트리를 병합 분석하는 중입니다..."
-        )
+        self._set_result_text("...데이터베이스 시스템 카탈로그 조회 및 AST 트리를 병합 분석하는 중입니다...")
 
         t = threading.Thread(target=self.run_analysis, args=(query, conn_params), daemon=True)
         t.start()
@@ -467,9 +497,7 @@ class App(ctk.CTk):
                     if not explain_data:
                         self.after(
                             0,
-                            lambda: self._set_result_text(
-                                "[안내] 수집된 실행계획 정보가 비어 있습니다."
-                            ),
+                            lambda: self._set_result_text("[안내] 수집된 실행계획 정보가 비어 있습니다."),
                         )
                         return
 
@@ -507,9 +535,7 @@ class App(ctk.CTk):
         except ValueError as err:
             self.after(
                 0,
-                lambda error_val=err: self._set_result_text_colored(
-                    f"❌ [안전 경고]\n\n{error_val!s}", self.color_pink
-                ),
+                lambda error_val=err: self._set_result_text_colored(f"❌ [안전 경고]\n\n{error_val!s}", self.color_pink),
             )
         except psycopg.errors.QueryCanceled as err:
             self.after(
@@ -529,9 +555,7 @@ class App(ctk.CTk):
                 before = query[:pos]
                 line_number = before.count("\n") + 1
                 error_preview = f"\n[오류 예상 위치: {line_number}번째 줄]\n"
-                error_preview += (
-                    f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
-                )
+                error_preview += f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
 
             self.after(
                 0,

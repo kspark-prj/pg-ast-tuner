@@ -1,7 +1,15 @@
 [
     {
-        "timestamp": "2026-08-09 10:23:34",
+        "timestamp": "2026-08-09 18:05:52",
+        "query": "SELECT * FROM test_orders WHERE UPPER(order_status) = 'ACTIVE';"
+    },
+    {
+        "timestamp": "2026-08-09 18:03:35",
         "query": "SELECT * FROM test_orders WHERE UPPER(status) = 'ACTIVE';"
+    },
+    {
+        "timestamp": "2026-08-09 18:02:44",
+        "query": "SELECT o.order_id, u.username\nFROM test_orders o\nJOIN test_users u ON UPPER(o.order_status) = UPPER(u.user_category);"
     },
     {
         "timestamp": "2026-08-07 12:26:09",
