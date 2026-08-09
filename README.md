@@ -246,6 +246,6 @@ python -m PyInstaller main.spec
 Spec 파일 없이 명령어로 직접 빌드하는 경우, `psycopg` 모듈의 동적 바인딩 파일들을 수집하도록 `--collect-all` 옵션을 반드시 포함해야 합니다.
 
 ```bash
-python -m PyInstaller --clean --noconfirm -w -D --icon=main.ico --add-data "splash.png;." --collect-all psycopg --collect-all sqlglot --collect-all rules --exclude-module Pillow --exclude-module pytest --exclude-module matplotlib --exclude-module tkinter.test --exclude-module PyQt5 --exclude-module PyQt6 --exclude-module PySide2 --exclude-module PySide6 --exclude-module scipy --exclude-module pandas --exclude-module IPython --exclude-module notebook --exclude-module tornado main.py
+python -m PyInstaller --clean --noconfirm -w -D --icon=main.ico --splash splash.png --add-data "splash.png;." --collect-all psycopg --collect-all sqlglot --collect-all rules --exclude-module pytest --exclude-module matplotlib --exclude-module tkinter.test --exclude-module PyQt5 --exclude-module PyQt6 --exclude-module PySide2 --exclude-module PySide6 --exclude-module scipy --exclude-module pandas --exclude-module IPython --exclude-module notebook --exclude-module tornado main.py
 
 ```

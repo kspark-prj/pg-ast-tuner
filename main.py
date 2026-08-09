@@ -7,6 +7,12 @@ from typing import Any
 
 import customtkinter as ctk
 
+# PyInstaller 네이티브 스플래시 모듈 (PyInstaller 실행 환경에서만 존재)
+try:
+    import pyi_splash
+except ImportError:
+    pyi_splash = None
+
 # 핵심 라이브러리
 import psycopg
 from PIL import Image
@@ -40,8 +46,14 @@ class SplashScreen(ctk.CTkToplevel):
         super().__init__(parent)
         self.parent = parent
 
-        self.width = 600
-        self.height = 350
+        # 1. 이미지 원본 해상도 (600x350) 및 하단 바 높이(60) 지정
+        self.img_width = 600
+        self.img_height = 350
+        self.bar_height = 60
+
+        # 전체 창 크기 = 가로 600, 세로 410 (이미지 350 + 프로그래스바 60)
+        self.width = self.img_width
+        self.height = self.img_height + self.bar_height
 
         # OS 타이틀바 제거
         self.overrideredirect(True)
@@ -57,11 +69,13 @@ class SplashScreen(ctk.CTkToplevel):
         self.attributes("-topmost", True)
         self.configure(fg_color="#1C1D1F")
 
-        # 1. 이미지 영역 (상단 ~280px)
+        # 2. 원본 비율을 100% 유지하는 이미지 영역 (상단 350px)
         image_path = get_resource_path("splash.png")
         if os.path.exists(image_path):
             pil_img = Image.open(image_path)
-            self.splash_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(600, 280))
+            self.splash_img = ctk.CTkImage(
+                light_image=pil_img, dark_image=pil_img, size=(self.img_width, self.img_height)
+            )
             self.lbl_image = ctk.CTkLabel(self, image=self.splash_img, text="")
             self.lbl_image.pack(side="top", fill="both", expand=True)
         else:
@@ -70,11 +84,14 @@ class SplashScreen(ctk.CTkToplevel):
                 text="PostgreSQL Performance Tuner",
                 font=ctk.CTkFont(size=22, weight="bold"),
                 text_color="#D8DEE9",
+                height=self.img_height,
             )
-            self.lbl_image.pack(side="top", fill="both", expand=True, pady=80)
+            self.lbl_image.pack(side="top", fill="both", expand=True)
 
-        # 2. 하단 로딩 바 영역 (하단 70px)
-        self.bottom_frame = ctk.CTkFrame(self, fg_color="#18191A", height=70, corner_radius=0)
+        # 3. 이미지 아래 하단 프로그래스 바 영역 (하단 60px)
+        self.bottom_frame = ctk.CTkFrame(
+            self, fg_color="#18191A", height=self.bar_height, corner_radius=0
+        )
         self.bottom_frame.pack(side="bottom", fill="x")
 
         self.lbl_status = ctk.CTkLabel(
@@ -83,26 +100,30 @@ class SplashScreen(ctk.CTkToplevel):
             font=ctk.CTkFont(size=11),
             text_color="#9299A6",
         )
-        self.lbl_status.pack(anchor="w", padx=20, pady=(8, 2))
+        self.lbl_status.pack(anchor="w", padx=20, pady=(6, 2))
 
         self.progress_bar = ctk.CTkProgressBar(
             self.bottom_frame,
             width=560,
-            height=10,
+            height=8,
             progress_color="#2F5C8F",
             fg_color="#2E3033",
         )
-        self.progress_bar.pack(padx=20, pady=(2, 12))
+        self.progress_bar.pack(padx=20, pady=(2, 10))
         self.progress_bar.set(0.0)
 
+        # OS 수준에서 창을 즉시 생성하고 그리도록 강제 갱신
         self.update_idletasks()
+        self.update()
 
     def set_progress(self, value: float, status_text: str = ""):
-        """진행 상황(0.0 ~ 1.0)과 텍스트 상태를 안전하게 갱신합니다."""
+        """진행 상황(0.0 ~ 1.0)과 텍스트 상태를 안전하게 즉시 갱신합니다."""
         self.progress_bar.set(value)
         if status_text:
             self.lbl_status.configure(text=status_text)
+        # UI 상태 변경 시 즉시 화면 리프레시
         self.update_idletasks()
+        self.update()
 
 
 # ==========================================
@@ -124,11 +145,15 @@ class App(ctk.CTk):
         # 메인 창 숨김
         self.withdraw()
 
-        # 단일 스플래시 창 생성
+        # [Zero-Flicker Step 1] CustomTkinter 스플래시를 먼저 창에 띄우고 강제 렌더링
         self.splash = SplashScreen(self)
 
-        # 비동기 로딩 시퀀스 시작 (time.sleep 대신 after 사용)
-        self.after(100, self._load_step_1)
+        # [Zero-Flicker Step 2] 스플래시가 바탕화면을 완벽히 가린 직후 PyInstaller 네이티브 스플래시 닫기
+        if pyi_splash and pyi_splash.is_alive():
+            pyi_splash.close()
+
+        # 메인 이벤트 루프 시작 직후(0ms) 단계별 비동기 로딩 진입
+        self.after(0, self._load_step_1)
 
     def _load_step_1(self):
         self.splash.set_progress(0.25, "시스템 접속 환경 설정 로딩 중...")
@@ -143,7 +168,7 @@ class App(ctk.CTk):
         self.color_gold = "#F4D35E"
         self.color_pink = "#F97B7D"
 
-        self.after(300, self._load_step_2)
+        self.after(100, self._load_step_2)
 
     def _load_step_2(self):
         self.splash.set_progress(0.60, "UI 컨트롤 및 모듈 생성 중...")
@@ -153,16 +178,20 @@ class App(ctk.CTk):
         self.create_header_frame()
         self.create_workspace()
 
-        self.after(300, self._load_step_3)
+        self.after(100, self._load_step_3)
 
     def _load_step_3(self):
         self.splash.set_progress(1.0, "초기화 완료! 메인 화면을 열고 있습니다...")
-        self.after(200, self._finish_loading)
+        self.after(150, self._finish_loading)
 
     def _finish_loading(self):
-        # 스플래시 닫고 메인 화면 활성화
-        self.splash.destroy()
+        # [Zero-Flicker Step 3] 메인 창을 먼저 화면에 표시하고 UI 구조 렌더링 강제 완료
         self.deiconify()
+        self.update_idletasks()
+        self.update()
+
+        # [Zero-Flicker Step 4] 메인 창이 준비된 후 상단의 CustomTkinter 스플래시 제거
+        self.splash.destroy()
         self.focus_force()
 
     def create_header_frame(self):
