@@ -74,7 +74,9 @@ class SplashScreen(ctk.CTkToplevel):
         image_path = get_resource_path("splash.png")
         if os.path.exists(image_path):
             pil_img = Image.open(image_path)
-            self.splash_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(self.img_width, self.img_height))
+            self.splash_img = ctk.CTkImage(
+                light_image=pil_img, dark_image=pil_img, size=(self.img_width, self.img_height)
+            )
             self.lbl_image = ctk.CTkLabel(self, image=self.splash_img, text="")
             self.lbl_image.pack(side="top", fill="both", expand=True)
         else:
@@ -88,7 +90,9 @@ class SplashScreen(ctk.CTkToplevel):
             self.lbl_image.pack(side="top", fill="both", expand=True)
 
         # 3. 이미지 아래 하단 프로그래스 바 영역 (하단 60px)
-        self.bottom_frame = ctk.CTkFrame(self, fg_color="#18191A", height=self.bar_height, corner_radius=0)
+        self.bottom_frame = ctk.CTkFrame(
+            self, fg_color="#18191A", height=self.bar_height, corner_radius=0
+        )
         self.bottom_frame.pack(side="bottom", fill="x")
 
         self.lbl_status = ctk.CTkLabel(
@@ -348,7 +352,7 @@ class App(ctk.CTk):
         self.txt_result.bind("<Command-F>", lambda e: self.open_search_dialog(self.txt_result))
 
     # ==========================================
-    # Ctrl+F 검색 시 하이라이트/알림창 없이 포커스 이동만 수행
+    # Ctrl+F 검색 시 전체 하이라이트 + 포커스 이동 + 클릭 시 제거 처리
     # ==========================================
     def open_search_dialog(self, target_textbox: ctk.CTkTextbox):
         keyword = simpledialog.askstring("찾기", "검색할 단어를 입력하세요:", parent=self)
@@ -358,17 +362,57 @@ class App(ctk.CTk):
         # 내부 tkinter Text 위젯 참조
         inner_text = target_textbox._textbox
 
-        # 현재 커서 위치부터 검색 (대소문자 구별 없음)
-        pos = inner_text.search(keyword, "insert", stopindex="end", nocase=True)
+        # 기존 하이라이트 태그 제거
+        inner_text.tag_remove("search_highlight", "1.0", "end")
+        inner_text.tag_remove("search_current", "1.0", "end")
 
-        # 현재 위치 이후에 없으면 문서 처음부터 재검색 (Wrap Search)
-        if not pos:
-            pos = inner_text.search(keyword, "1.0", stopindex="end", nocase=True)
+        # 1. 전체 검색 결과 하이라이트 스타일 (차분한 푸른색)
+        inner_text.tag_config("search_highlight", background="#2F5C8F", foreground="#FFFFFF")
+        # 2. 현재 선택/포커스된 단어 스타일 (밝은 포인트 푸른색)
+        inner_text.tag_config("search_current", background="#4173AA", foreground="#FFFFFF")
 
-        if pos:
-            # 발견된 단어 위치로 스크롤 및 커서 이동
-            inner_text.see(pos)
-            inner_text.mark_set("insert", pos)
+        # 마우스 클릭 시 모든 하이라이트 제거
+        def remove_highlight(event):
+            inner_text.tag_remove("search_highlight", "1.0", "end")
+            inner_text.tag_remove("search_current", "1.0", "end")
+
+        inner_text.bind("<Button-1>", remove_highlight, add="+")
+
+        # 문서 전체를 순회하여 검색어와 일치하는 '모든 위치'에 하이라이트 적용
+        idx = "1.0"
+        match_count = 0
+        while True:
+            pos = inner_text.search(keyword, idx, stopindex="end", nocase=True)
+            if not pos:
+                break
+            end_pos = f"{pos}+{len(keyword)}c"
+            inner_text.tag_add("search_highlight", pos, end_pos)
+            idx = end_pos
+            match_count += 1
+
+        if match_count == 0:
+            messagebox.showinfo("검색 결과", f"'{keyword}' 단어를 찾을 수 없습니다.", parent=self)
+            return "break"
+
+        # 현재 커서 위치("insert") 기준 순차 이동할 다음 단어 탐색
+        start_pos = inner_text.index("insert")
+        next_pos = inner_text.search(keyword, start_pos, stopindex="end", nocase=True)
+
+        # 문서 끝까지 다 돌았으면 처음("1.0")부터 다시 포커스
+        if not next_pos:
+            next_pos = inner_text.search(keyword, "1.0", stopindex="end", nocase=True)
+
+        if next_pos:
+            end_next_pos = f"{next_pos}+{len(keyword)}c"
+
+            # 현재 선택된 단어만 상단에 더 밝은 강조 태그 추가
+            inner_text.tag_add("search_current", next_pos, end_next_pos)
+
+            # 다음 검색 시 이 위치 이후부터 찾도록 커서 이동
+            inner_text.mark_set("insert", end_next_pos)
+
+            # 발견된 위치로 스크롤 및 포커스 이동
+            inner_text.see(next_pos)
             target_textbox.focus_set()
 
         return "break"
@@ -456,7 +500,9 @@ class App(ctk.CTk):
 
         conn_params = {key: entry.get().strip() for key, entry in self.entries.items()}
         self.btn_run.configure(state="disabled", text="⏳ 분석 진행 중...")
-        self._set_result_text("...데이터베이스 시스템 카탈로그 조회 및 AST 트리를 병합 분석하는 중입니다...")
+        self._set_result_text(
+            "...데이터베이스 시스템 카탈로그 조회 및 AST 트리를 병합 분석하는 중입니다..."
+        )
 
         t = threading.Thread(target=self.run_analysis, args=(query, conn_params), daemon=True)
         t.start()
@@ -497,7 +543,9 @@ class App(ctk.CTk):
                     if not explain_data:
                         self.after(
                             0,
-                            lambda: self._set_result_text("[안내] 수집된 실행계획 정보가 비어 있습니다."),
+                            lambda: self._set_result_text(
+                                "[안내] 수집된 실행계획 정보가 비어 있습니다."
+                            ),
                         )
                         return
 
@@ -535,7 +583,9 @@ class App(ctk.CTk):
         except ValueError as err:
             self.after(
                 0,
-                lambda error_val=err: self._set_result_text_colored(f"❌ [안전 경고]\n\n{error_val!s}", self.color_pink),
+                lambda error_val=err: self._set_result_text_colored(
+                    f"❌ [안전 경고]\n\n{error_val!s}", self.color_pink
+                ),
             )
         except psycopg.errors.QueryCanceled as err:
             self.after(
@@ -555,7 +605,9 @@ class App(ctk.CTk):
                 before = query[:pos]
                 line_number = before.count("\n") + 1
                 error_preview = f"\n[오류 예상 위치: {line_number}번째 줄]\n"
-                error_preview += f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
+                error_preview += (
+                    f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
+                )
 
             self.after(
                 0,
