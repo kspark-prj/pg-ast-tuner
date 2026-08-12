@@ -4,7 +4,7 @@ import re
 import sys
 import threading
 from tkinter import messagebox, simpledialog
-from typing import Any
+from typing import Any, Dict, List, Tuple
 
 import customtkinter as ctk
 
@@ -47,14 +47,9 @@ class SplashScreen(ctk.CTkToplevel):
         super().__init__(parent)
         self.parent = parent
 
-        # 1. 이미지 원본 해상도 (600x350) 및 하단 바 높이(60) 지정
-        self.img_width = 600
-        self.img_height = 350
-        self.bar_height = 60
-
-        # 전체 창 크기 = 가로 600, 세로 410 (이미지 350 + 프로그래스바 60)
-        self.width = self.img_width
-        self.height = self.img_height + self.bar_height
+        # 전체 창 크기를 600x410으로 고정
+        self.width = 600
+        self.height = 410
 
         # OS 타이틀바 제거
         self.overrideredirect(True)
@@ -68,32 +63,28 @@ class SplashScreen(ctk.CTkToplevel):
 
         # 최상단에 표시 & 배경색 지정
         self.attributes("-topmost", True)
-        self.configure(fg_color="#1C1D1F")
+        self.configure(fg_color="#18191A")
 
-        # 2. 원본 비율을 100% 유지하는 이미지 영역 (상단 350px)
+        # 1. 단일 배경 이미지 (600x410)
         image_path = get_resource_path("splash.png")
         if os.path.exists(image_path):
             pil_img = Image.open(image_path)
             self.splash_img = ctk.CTkImage(
-                light_image=pil_img, dark_image=pil_img, size=(self.img_width, self.img_height)
+                light_image=pil_img, dark_image=pil_img, size=(self.width, self.height)
             )
             self.lbl_image = ctk.CTkLabel(self, image=self.splash_img, text="")
-            self.lbl_image.pack(side="top", fill="both", expand=True)
         else:
             self.lbl_image = ctk.CTkLabel(
                 self,
                 text="PostgreSQL Performance Tuner",
                 font=ctk.CTkFont(size=22, weight="bold"),
                 text_color="#D8DEE9",
-                height=self.img_height,
             )
-            self.lbl_image.pack(side="top", fill="both", expand=True)
+        self.lbl_image.place(x=0, y=0, relwidth=1.0, relheight=1.0)
 
-        # 3. 이미지 아래 하단 프로그래스 바 영역 (하단 60px)
-        self.bottom_frame = ctk.CTkFrame(
-            self, fg_color="#18191A", height=self.bar_height, corner_radius=0
-        )
-        self.bottom_frame.pack(side="bottom", fill="x")
+        # 2. 하단 60px 영역 오버레이 레이아웃
+        self.bottom_frame = ctk.CTkFrame(self, fg_color="transparent", height=60, corner_radius=0)
+        self.bottom_frame.place(x=0, y=350, relwidth=1.0)
 
         self.lbl_status = ctk.CTkLabel(
             self.bottom_frame,
@@ -113,7 +104,6 @@ class SplashScreen(ctk.CTkToplevel):
         self.progress_bar.pack(padx=20, pady=(2, 10))
         self.progress_bar.set(0.0)
 
-        # OS 수준에서 창을 즉시 생성하고 그리도록 강제 갱신
         self.update_idletasks()
         self.update()
 
@@ -122,7 +112,6 @@ class SplashScreen(ctk.CTkToplevel):
         self.progress_bar.set(value)
         if status_text:
             self.lbl_status.configure(text=status_text)
-        # UI 상태 변경 시 즉시 화면 리프레시
         self.update_idletasks()
         self.update()
 
@@ -146,15 +135,17 @@ class App(ctk.CTk):
         # 메인 창 숨김
         self.withdraw()
 
-        # [Zero-Flicker Step 1] CustomTkinter 스플래시를 먼저 창에 띄우고 강제 렌더링
+        # [Zero-Flicker Step 1] 스플래시 창 생성 및 즉시 배치
         self.splash = SplashScreen(self)
 
-        # [Zero-Flicker Step 2] 스플래시가 바탕화면을 완벽히 가린 직후 PyInstaller 네이티브 스플래시 닫기
+        # [Zero-Flicker Step 2] 핸드오버 지연 버퍼 (80ms) 적용
+        self.after(80, self._handover_and_start_loading)
+
+    def _handover_and_start_loading(self):
         if pyi_splash and pyi_splash.is_alive():
             pyi_splash.close()
 
-        # 메인 이벤트 루프 시작 직후(0ms) 단계별 비동기 로딩 진입
-        self.after(0, self._load_step_1)
+        self._load_step_1()
 
     def _load_step_1(self):
         self.splash.set_progress(0.25, "시스템 접속 환경 설정 로딩 중...")
@@ -186,13 +177,14 @@ class App(ctk.CTk):
         self.after(150, self._finish_loading)
 
     def _finish_loading(self):
-        # [Zero-Flicker Step 3] 메인 창을 먼저 화면에 표시하고 UI 구조 렌더링 강제 완료
+        # [Zero-Flicker Step 3] 메인 창 표시
         self.deiconify()
         self.update_idletasks()
         self.update()
 
-        # [Zero-Flicker Step 4] 메인 창이 준비된 후 상단의 CustomTkinter 스플래시 제거
-        self.splash.destroy()
+        # [Zero-Flicker Step 4] 상단 스플래시 파기 및 포커스 이동
+        if hasattr(self, "splash") and self.splash:
+            self.splash.destroy()
         self.focus_force()
 
     def create_header_frame(self):
@@ -351,34 +343,38 @@ class App(ctk.CTk):
         self.txt_result.bind("<Command-f>", lambda e: self.open_search_dialog(self.txt_result))
         self.txt_result.bind("<Command-F>", lambda e: self.open_search_dialog(self.txt_result))
 
+        # 마우스 클릭 시 하이라이트 제거용 이벤트 바인딩 (메모리 누수 방지를 위해 각 위젯당 최초 1회 등록)
+        for tb in [self.txt_query._textbox, self.txt_result._textbox]:
+            tb.bind("<Button-1>", self._clear_search_highlights, add="+")
+
+    def _clear_search_highlights(self, event):
+        """텍스트 박스 클릭 시 모든 검색 하이라이트 태그 제거"""
+        widget = event.widget
+        try:
+            widget.tag_remove("search_highlight", "1.0", "end")
+            widget.tag_remove("search_current", "1.0", "end")
+        except Exception:
+            pass
+
     # ==========================================
-    # Ctrl+F 검색 시 전체 하이라이트 + 포커스 이동 + 클릭 시 제거 처리
+    # Ctrl+F 검색 시 전체 하이라이트 + 포커스 이동 처리
     # ==========================================
     def open_search_dialog(self, target_textbox: ctk.CTkTextbox):
         keyword = simpledialog.askstring("찾기", "검색할 단어를 입력하세요:", parent=self)
         if not keyword:
             return "break"
 
-        # 내부 tkinter Text 위젯 참조
         inner_text = target_textbox._textbox
 
-        # 기존 하이라이트 태그 제거
-        inner_text.tag_remove("search_highlight", "1.0", "end")
-        inner_text.tag_remove("search_current", "1.0", "end")
+        # 기존 하이라이트 태그 초기화
+        self._clear_search_highlights(type("Event", (object,), {"widget": inner_text})())
 
-        # 1. 전체 검색 결과 하이라이트 스타일 (차분한 푸른색)
+        # 1. 전체 검색 결과 하이라이트 스타일
         inner_text.tag_config("search_highlight", background="#2F5C8F", foreground="#FFFFFF")
-        # 2. 현재 선택/포커스된 단어 스타일 (밝은 포인트 푸른색)
+        # 2. 현재 선택/포커스된 단어 스타일
         inner_text.tag_config("search_current", background="#4173AA", foreground="#FFFFFF")
 
-        # 마우스 클릭 시 모든 하이라이트 제거
-        def remove_highlight(event):
-            inner_text.tag_remove("search_highlight", "1.0", "end")
-            inner_text.tag_remove("search_current", "1.0", "end")
-
-        inner_text.bind("<Button-1>", remove_highlight, add="+")
-
-        # 문서 전체를 순회하여 검색어와 일치하는 '모든 위치'에 하이라이트 적용
+        # 문서 전체 순회 및 태그 추가
         idx = "1.0"
         match_count = 0
         while True:
@@ -394,24 +390,17 @@ class App(ctk.CTk):
             messagebox.showinfo("검색 결과", f"'{keyword}' 단어를 찾을 수 없습니다.", parent=self)
             return "break"
 
-        # 현재 커서 위치("insert") 기준 순차 이동할 다음 단어 탐색
+        # 현재 커서 위치 기준 다음 일치 항목 탐색
         start_pos = inner_text.index("insert")
         next_pos = inner_text.search(keyword, start_pos, stopindex="end", nocase=True)
 
-        # 문서 끝까지 다 돌았으면 처음("1.0")부터 다시 포커스
         if not next_pos:
             next_pos = inner_text.search(keyword, "1.0", stopindex="end", nocase=True)
 
         if next_pos:
             end_next_pos = f"{next_pos}+{len(keyword)}c"
-
-            # 현재 선택된 단어만 상단에 더 밝은 강조 태그 추가
             inner_text.tag_add("search_current", next_pos, end_next_pos)
-
-            # 다음 검색 시 이 위치 이후부터 찾도록 커서 이동
             inner_text.mark_set("insert", end_next_pos)
-
-            # 발견된 위치로 스크롤 및 포커스 이동
             inner_text.see(next_pos)
             target_textbox.focus_set()
 
@@ -424,30 +413,30 @@ class App(ctk.CTk):
     def save_config(self):
         config_data = {key: entry.get().strip() for key, entry in self.entries.items()}
         ConfigManager.save_config(config_data)
-
         messagebox.showinfo("성공", "데이터베이스 접속 설정이 로컬 파일에 안전하게 기록되었습니다.")
+
+    def _format_history_label(self, item: dict) -> str:
+        """쿼리 이력 항목을 드롭다운 표시용 포맷으로 변환"""
+        query_lines = [line.strip() for line in item["query"].splitlines() if line.strip()]
+        preview = " ".join(query_lines)[:25]
+        if len(" ".join(query_lines)) > 25:
+            preview += "..."
+
+        try:
+            parts = item["timestamp"].split(" ")
+            date_part = parts[0]
+            time_part = parts[1]
+            month_day = "-".join(date_part.split("-")[1:])
+            time_short = ":".join(time_part.split(":")[:2])
+            time_str = f"{month_day} {time_short}"
+        except Exception:
+            time_str = item["timestamp"]
+
+        return f"[{time_str}] {preview}"
 
     def load_history_menu(self):
         self.history_items = HistoryManager.load_history()
-        options = []
-        for item in self.history_items:
-            query_lines = [line.strip() for line in item["query"].splitlines() if line.strip()]
-            preview = " ".join(query_lines)[:25]
-            if len(" ".join(query_lines)) > 25:
-                preview += "..."
-
-            try:
-                parts = item["timestamp"].split(" ")
-                date_part = parts[0]
-                time_part = parts[1]
-                month_day = "-".join(date_part.split("-")[1:])
-                time_short = ":".join(time_part.split(":")[:2])
-                time_str = f"{month_day} {time_short}"
-            except Exception:
-                time_str = item["timestamp"]
-
-            label = f"[{time_str}] {preview}"
-            options.append(label)
+        options = [self._format_history_label(item) for item in self.history_items]
 
         if not options:
             self.history_menu.configure(values=["최근 쿼리 이력 없음"], state="disabled")
@@ -461,24 +450,7 @@ class App(ctk.CTk):
             return
 
         try:
-            options = []
-            for item in self.history_items:
-                query_lines = [line.strip() for line in item["query"].splitlines() if line.strip()]
-                preview = " ".join(query_lines)[:25]
-                if len(" ".join(query_lines)) > 25:
-                    preview += "..."
-                try:
-                    parts = item["timestamp"].split(" ")
-                    date_part = parts[0]
-                    time_part = parts[1]
-                    month_day = "-".join(date_part.split("-")[1:])
-                    time_short = ":".join(time_part.split(":")[:2])
-                    time_str = f"{month_day} {time_short}"
-                except Exception:
-                    time_str = item["timestamp"]
-                label = f"[{time_str}] {preview}"
-                options.append(label)
-
+            options = [self._format_history_label(item) for item in self.history_items]
             idx = options.index(selected_label)
             full_query = self.history_items[idx]["query"]
 
