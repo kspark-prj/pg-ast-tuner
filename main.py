@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import socket
 import sys
 import threading
 from tkinter import messagebox, simpledialog
@@ -27,6 +28,9 @@ from core.engine import RuleEngine
 from core.parser import PGPlanAnalyzer
 from models.recommendation import RecommendationModel
 from rules.base_rule import RuleContext
+
+# 중복 실행 방지용 로컬 포트 (앱 전용 고유 포트)
+SINGLE_INSTANCE_PORT = 47382
 
 
 # ==========================================
@@ -69,9 +73,7 @@ class SplashScreen(ctk.CTkToplevel):
         image_path = get_resource_path("splash.png")
         if os.path.exists(image_path):
             pil_img = Image.open(image_path)
-            self.splash_img = ctk.CTkImage(
-                light_image=pil_img, dark_image=pil_img, size=(self.width, self.height)
-            )
+            self.splash_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(self.width, self.height))
             self.lbl_image = ctk.CTkLabel(self, image=self.splash_img, text="")
         else:
             self.lbl_image = ctk.CTkLabel(
@@ -472,9 +474,7 @@ class App(ctk.CTk):
 
         conn_params = {key: entry.get().strip() for key, entry in self.entries.items()}
         self.btn_run.configure(state="disabled", text="⏳ 분석 진행 중...")
-        self._set_result_text(
-            "...데이터베이스 시스템 카탈로그 조회 및 AST 트리를 병합 분석하는 중입니다..."
-        )
+        self._set_result_text("...데이터베이스 시스템 카탈로그 조회 및 AST 트리를 병합 분석하는 중입니다...")
 
         t = threading.Thread(target=self.run_analysis, args=(query, conn_params), daemon=True)
         t.start()
@@ -515,9 +515,7 @@ class App(ctk.CTk):
                     if not explain_data:
                         self.after(
                             0,
-                            lambda: self._set_result_text(
-                                "[안내] 수집된 실행계획 정보가 비어 있습니다."
-                            ),
+                            lambda: self._set_result_text("[안내] 수집된 실행계획 정보가 비어 있습니다."),
                         )
                         return
 
@@ -555,9 +553,7 @@ class App(ctk.CTk):
         except ValueError as err:
             self.after(
                 0,
-                lambda error_val=err: self._set_result_text_colored(
-                    f"❌ [안전 경고]\n\n{error_val!s}", self.color_pink
-                ),
+                lambda error_val=err: self._set_result_text_colored(f"❌ [안전 경고]\n\n{error_val!s}", self.color_pink),
             )
         except psycopg.errors.QueryCanceled as err:
             self.after(
@@ -577,9 +573,7 @@ class App(ctk.CTk):
                 before = query[:pos]
                 line_number = before.count("\n") + 1
                 error_preview = f"\n[오류 예상 위치: {line_number}번째 줄]\n"
-                error_preview += (
-                    f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
-                )
+                error_preview += f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
 
             self.after(
                 0,
@@ -705,5 +699,55 @@ class App(ctk.CTk):
 
 
 if __name__ == "__main__":
+    # 1. 독점 소켓 바인딩 시도로 단일 인스턴스 검증 (SO_REUSEADDR 제거로 Windows 중복 바인딩 방지)
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    try:
+        server_socket.bind(("127.0.0.1", SINGLE_INSTANCE_PORT))
+        server_socket.listen(1)
+    except OSError:
+        # 이미 실행 중인 인스턴스가 존재함 -> 기존 인스턴스에 포커스 신호 전달
+        try:
+            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client_socket.settimeout(2)
+            client_socket.connect(("127.0.0.1", SINGLE_INSTANCE_PORT))
+            client_socket.sendall(b"FOCUS")
+            client_socket.close()
+        except Exception:
+            pass
+
+        # PyInstaller C-레벨 스플래시가 켜져있다면 강제 종료
+        if pyi_splash and pyi_splash.is_alive():
+            pyi_splash.close()
+
+        # 스플래시 창 및 GUI 객체를 일체 생성하지 않고 즉시 앱 종료
+        sys.exit(0)
+
+    # 2. 첫 번째 실행인 경우에만 메인 애플리케이션 생성
     app = App()
+
+    # 3. 중복 실행 시 기존 창을 복원하고 포커스를 가져오는 리스너
+    def listen_for_focus():
+        while True:
+            try:
+                conn, _ = server_socket.accept()
+                data = conn.recv(1024)
+                if data == b"FOCUS":
+
+                    def bring_to_front():
+                        app.deiconify()
+                        app.state("normal")
+                        app.attributes("-topmost", True)
+                        app.update()
+                        app.focus_force()
+                        app.attributes("-topmost", False)
+
+                    app.after(0, bring_to_front)
+                conn.close()
+            except Exception:
+                break
+
+    listener_thread = threading.Thread(target=listen_for_focus, daemon=True)
+    listener_thread.start()
+
     app.mainloop()
