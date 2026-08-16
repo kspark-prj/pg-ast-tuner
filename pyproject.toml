@@ -1,0 +1,24 @@
+[project]
+name = "pg-ast-tuner"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "kspark", email = "kspark.prj@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "customtkinter>=5.2.0,<6.0.0",
+    "pillow>=10.0.0,<11.0.0",
+    "psycopg[binary]>=3.1.0,<4.0.0",
+    "pydantic>=2.7.0,<3.0.0",
+    "pytest>=8.0.0,<10.0.0",
+    "sqlglot>=26.0.0,<27.0.0",
+]
+
+[project.scripts]
+pg-ast-tuner = "pg_ast_tuner:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
