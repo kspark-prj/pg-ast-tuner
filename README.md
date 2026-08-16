@@ -13,6 +13,7 @@
 - **시스템 카탈로그 교차 검증**: 단순히 쿼리문만 파싱하는 것에 그치지 않고, `pg_class`, `pg_index` 등 데이터베이스 시스템 카탈로그를 실시간 조회하여 인덱스 구성 상태 및 실제 데이터 테이블 크기(Row Count)를 고려한 정밀 휴리스틱 진단을 수행합니다.
 - **규칙 자동 검색(Auto-Discovery) 엔진**: 새 규칙 추가 시 `rules/` 하위에 파일만 생성하면 엔진 코드나 GUI 코드 수정 없이 동적으로 탐색되어 즉시 반영됩니다.
 - **안전한 온디맨드(On-Demand) 트랜잭션 및 이중 락다운**: 분석 버튼을 누르는 즉시 연결을 맺고 완료 즉시 차단하며, `Explain (Analyze)` 등으로 인한 데이터 변경 가능성을 방지하기 위해 강제 롤백(Rollback) 세션 구조를 채택했습니다. 또한, 기존의 정적 문자열 매칭 한계를 극복하고 **SQL AST 분석을 활용하여 CTE(WITH 절) 내의 DML/DDL 우회 시도까지 이중으로 완전 차단**합니다.
+- **정밀화된 오진(False Positive) 방지 필터링**: 단순히 특정 노드 유형이나 단일 속성의 유무만 매칭하는 방식에서 벗어나, 중첩 루프 조인의 매개변수화(Parameterized) 여부(외부 릴레이션/별칭의 조건절 하향식 참조 확인), 대량 스캔 필터링 시 누적 유효 행(Live Rows) 대비 밀도 연산, 그리고 시스템 메타데이터 미확보 시의 안전한 예외 차단 등을 종합 적용하여 실무 환경에서의 오탐과 비정상 분석 크래시를 원천적으로 방지합니다.
 - **스마트 주석 처리(Comment Stripper)**: 한 줄 주석(`--`) 및 인라인 블록 주석(`/* ... */`)이 섞여 있는 대용량 실무 쿼리도 에러 없이 완벽하게 정제하여 처리합니다.
 
 ---
@@ -60,7 +61,7 @@ project/
 | `RULE_SCAN_005` | `HighFilterRemovalRatioRule`  | Seq Scan, Index Scan 등     | 스캔 후 Filter 조건으로 버려지는 행(Rows Removed) 비율이 높아 발생하는 I/O 낭비 진단 (90% 이상 버려질 시)            |
 | `RULE_SCAN_006` | `SubqueryScanRepetitionRule`  | Subquery Scan               | 상관 서브쿼리나 미튜닝 스칼라 서브쿼리가 상위 루프만큼 반복 실행(N+1 스캔 병목)되는지 진단                           |
 | `RULE_SCAN_007` | `IndexFilterInefficiencyRule` | Index Scan, Index Only Scan | Index Cond이 아닌 Index Filter로 과도한 행이 스캔되는 비효율 진단 (선행 컬럼 Prefix Match 평가 포함)                 |
-| `RULE_SCAN_008` | `StaleVisibilityMapRule`      | Seq Scan, Bitmap Heap Scan  | 데드 튜플(Dead Tuples) 및 테이블 블로트(Bloat)로 인한 불필요한 I/O 대량 발생 진단                                    |
+| `RULE_SCAN_008` | `StaleVisibilityMapRule`      | Seq Scan, Bitmap Heap Scan  | 데드 튜플(Dead Tuples) 및 테이블 블로트(Bloat)로 인한 불필요한 I/O 대량 발생 진단 (선택도 필터링을 반영한 Live 행 밀도 연산 적용) |
 
 ### 2. 조인 진단 규칙 (JOIN Category)
 
@@ -72,7 +73,7 @@ project/
 | `RULE_JOIN_004` | `NestedLoopHighLoopsRule`          | Nested Loop            | 내부 테이블 반복 탐색 횟수(Loops)가 과도하게 많아(10만회 이상) 발생하는 랜덤 I/O 및 CPU 부하 진단               |
 | `RULE_JOIN_005` | `HashJoinLargeBuildTableRule`      | Hash Join              | 통계 정보 불일치 등으로 인해 더 작은 집합이 아닌 대량 데이터 테이블이 해시 빌드(Build Side)로 지정되었는지 진단 |
 | `RULE_JOIN_006` | `JoinCardinalityMisestimationRule` | Hash/NL/Merge Join     | 옵티마이저 예측 행 수(Plan Rows)와 실제 처리 행 수(Actual Rows) 간 10배 이상의 큰 카디널리티 오차 진단          |
-| `RULE_JOIN_007` | `CrossJoinRule`                    | Nested Loop, Hash Join | 조인 조건이 누락되거나 잘못 설정되어 발생하는 카티시안 곱(Cartesian Product, Cross Join) 진단                   |
+| `RULE_JOIN_007` | `CrossJoinRule`                    | Nested Loop, Hash Join | 조인 조건이 누락되거나 잘못 설정되어 발생하는 카티시안 곱(Cartesian Product, Cross Join) 진단 (매개변수화된 Parameterized NL 조인 필터링 적용) |
 | `RULE_JOIN_008` | `ParallelJoinWorkerLossRule`       | Gather, Gather Merge   | 병렬 조인 수행 시 계획된 워커 수보다 실제 실행 시 할당된 워커 수(Workers Launched)가 부족한 현상 진단           |
 | `RULE_JOIN_009` | `HashJoinBatchInflationRule`       | Hash Join              | 빌드 데이터 예측 실패로 인해 실행 중 해시 배치 수가 최초 예상보다 동적으로 폭증(8배 이상)했는지 진단            |
 

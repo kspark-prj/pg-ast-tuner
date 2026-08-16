@@ -1,4 +1,6 @@
 
+import re
+
 from models.recommendation import RecommendationModel
 from rules.base_rule import BaseRule, RuleContext
 
@@ -25,7 +27,25 @@ class CrossJoinRule(BaseRule):
         has_join_filter = "Join Filter" in node
         has_filter = "Filter" in node
 
-        if not (has_hash_cond or has_join_filter or has_filter):
+        is_cross_join = not (has_hash_cond or has_join_filter or has_filter)
+
+        # Nested Loop의 경우, 내부 구동 테이블(inner plan)의 인덱스 조건이나 필터 등에서
+        # 외부 테이블의 컬럼/별칭을 참조하여 Parameterized 된 조인을 수행하는지 체크합니다.
+        # Parameterized Nested Loop는 카티시안 곱(Cross Join)이 아니므로 제외합니다.
+        if is_cross_join and node_type == "Nested Loop":
+            plans = node.get("Plans", [])
+            if len(plans) >= 2:
+                outer_plan = plans[0]
+                inner_plan = plans[1]
+
+                # 외부 테이블의 별칭(Alias) 및 릴레이션명(Relation Name) 수집
+                outer_aliases = self._collect_aliases(outer_plan)
+
+                # 내부 테이블의 조건절 등에서 외부 테이블 별칭을 참조하는지 확인
+                if self._is_parameterized(inner_plan, outer_aliases):
+                    is_cross_join = False
+
+        if is_cross_join:
             recommendations.append(
                 RecommendationModel(
                     title="카티시안 곱(Cross Join) 발생 감지",
@@ -41,3 +61,47 @@ class CrossJoinRule(BaseRule):
             )
 
         return recommendations
+
+    def _collect_aliases(self, node: dict) -> set[str]:
+        aliases = set()
+        if "Relation Name" in node:
+            aliases.add(node["Relation Name"])
+        if "Alias" in node:
+            aliases.add(node["Alias"])
+        if "CTE Name" in node:
+            aliases.add(node["CTE Name"])
+
+        for sub_plan in node.get("Plans", []):
+            aliases.update(self._collect_aliases(sub_plan))
+        return aliases
+
+    def _is_parameterized(self, node: dict, outer_aliases: set[str]) -> bool:
+        if not outer_aliases:
+            return False
+
+        excluded_keys = {
+            "Node Type",
+            "Parent Relationship",
+            "Relation Name",
+            "Alias",
+            "Index Name",
+            "CTE Name",
+            "Schema",
+            "Database",
+        }
+
+        for key, value in node.items():
+            if key in excluded_keys:
+                continue
+            if isinstance(value, str):
+                for alias in outer_aliases:
+                    pattern = rf'(?<![a-zA-Z0-9_])"?{re.escape(alias)}"?\.'
+                    if re.search(pattern, value):
+                        return True
+
+        for sub_plan in node.get("Plans", []):
+            if self._is_parameterized(sub_plan, outer_aliases):
+                return True
+
+        return False
+

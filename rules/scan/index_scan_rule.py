@@ -24,6 +24,9 @@ class IndexScanRule(BaseRule):
             return recommendations
 
         meta = context.metadata_provider.get_table_metadata(table_name)
+        if not meta:
+            return recommendations
+
         if meta.total_rows > 50000 and actual_rows > (meta.total_rows * 0.25):
             recommendations.append(
                 RecommendationModel(

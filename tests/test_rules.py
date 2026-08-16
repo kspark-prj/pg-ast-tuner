@@ -254,3 +254,139 @@ def test_query_history_saving_and_loading(tmp_path):
         # Restore original path
         HistoryManager.HISTORY_FILE = orig_file
 
+
+def test_cross_join_rule_detected():
+    from rules.join.CrossJoinRule import CrossJoinRule
+    context = RuleContext(
+        raw_query="SELECT * FROM t1 CROSS JOIN t2",
+        clean_query="SELECT * FROM t1 CROSS JOIN t2",
+        metadata_provider=MagicMock()
+    )
+    rule = CrossJoinRule()
+    node = {
+        "Node Type": "Nested Loop",
+        "Plans": [
+            {"Node Type": "Seq Scan", "Relation Name": "t1", "Alias": "t1"},
+            {"Node Type": "Seq Scan", "Relation Name": "t2", "Alias": "t2"}
+        ]
+    }
+    assert rule.match(context, node) is True
+    recs = rule.analyze(context, node)
+    assert len(recs) == 1
+    assert "카티시안 곱" in recs[0].title
+
+
+def test_cross_join_rule_parameterized_nested_loop():
+    from rules.join.CrossJoinRule import CrossJoinRule
+    context = RuleContext(
+        raw_query="SELECT * FROM routines r JOIN routine_schedules s ON r.routine_id = s.routine_id",
+        clean_query="SELECT * FROM routines r JOIN routine_schedules s ON r.routine_id = s.routine_id",
+        metadata_provider=MagicMock()
+    )
+    rule = CrossJoinRule()
+    node = {
+        "Node Type": "Nested Loop",
+        "Plans": [
+            {
+                "Node Type": "Index Scan",
+                "Relation Name": "routines",
+                "Alias": "r",
+                "Index Cond": "(user_id = 1)"
+            },
+            {
+                "Node Type": "Bitmap Heap Scan",
+                "Relation Name": "routine_schedules",
+                "Alias": "s",
+                "Recheck Cond": "(r.routine_id = routine_id)",
+                "Filter": "((day_of_week)::numeric = EXTRACT(dow FROM CURRENT_DATE))",
+                "Plans": [
+                    {
+                        "Node Type": "Bitmap Index Scan",
+                        "Index Name": "uq_routine_day",
+                        "Index Cond": "(routine_id = r.routine_id)"
+                    }
+                ]
+            }
+        ]
+    }
+    assert rule.match(context, node) is True
+    recs = rule.analyze(context, node)
+    assert len(recs) == 0
+
+
+def test_index_scan_and_seq_scan_rule_no_meta_safe():
+    from rules.scan.index_scan_rule import IndexScanRule
+    from rules.scan.seq_scan_rule import SeqScanRule
+
+    mock_provider = MagicMock()
+    mock_provider.get_table_metadata.return_value = None
+
+    context = RuleContext(
+        raw_query="SELECT * FROM missing_table WHERE id = 1",
+        clean_query="SELECT * FROM missing_table WHERE id = 1",
+        metadata_provider=mock_provider
+    )
+
+    # 1. IndexScanRule
+    idx_rule = IndexScanRule()
+    idx_node = {
+        "Node Type": "Index Scan",
+        "Relation Name": "missing_table",
+        "Actual Rows": 1000
+    }
+    assert idx_rule.match(context, idx_node) is True
+    assert idx_rule.analyze(context, idx_node) == []
+
+    # 2. SeqScanRule
+    seq_rule = SeqScanRule()
+    seq_node = {
+        "Node Type": "Seq Scan",
+        "Relation Name": "missing_table",
+        "Actual Rows": 1000
+    }
+    assert seq_rule.match(context, seq_node) is True
+    # Should not raise AttributeError when meta is None
+    assert seq_rule.analyze(context, seq_node) == []
+
+
+def test_stale_visibility_map_rule_selective_filter():
+    from rules.scan.StaleVisibilityMapRule import StaleVisibilityMapRule
+
+    rule = StaleVisibilityMapRule()
+
+    # Case A: Selective filter on dense table. Total blocks is 2000, actual rows is 50.
+    # But Rows Removed by Filter is 199,950. Total live rows is 200,000.
+    # Live row density = 200,000 / 2000 = 100 rows/block >= 0.1. Should NOT trigger.
+    node_dense = {
+        "Node Type": "Seq Scan",
+        "Relation Name": "dense_table",
+        "Shared Hit Blocks": 1500,
+        "Shared Read Blocks": 500,
+        "Actual Rows": 50,
+        "Rows Removed by Filter": 199950
+    }
+    context = RuleContext(
+        raw_query="SELECT * FROM dense_table WHERE status = 'SPECIAL'",
+        clean_query="SELECT * FROM dense_table WHERE status = 'SPECIAL'",
+        metadata_provider=MagicMock()
+    )
+    assert rule.match(context, node_dense) is True
+    assert rule.analyze(context, node_dense) == []
+
+    # Case B: True bloated table / dead tuples. Total blocks is 2000, actual rows is 50,
+    # Rows Removed by Filter is only 50 (i.e. only 100 live rows total in 2000 blocks).
+    # Live row density = 100 / 2000 = 0.05 < 0.1. Should trigger!
+    node_bloated = {
+        "Node Type": "Seq Scan",
+        "Relation Name": "bloated_table",
+        "Shared Hit Blocks": 1500,
+        "Shared Read Blocks": 500,
+        "Actual Rows": 50,
+        "Rows Removed by Filter": 50
+    }
+    recs = rule.analyze(context, node_bloated)
+    assert len(recs) == 1
+    assert "블로팅(Bloat)" in recs[0].title
+
+
+

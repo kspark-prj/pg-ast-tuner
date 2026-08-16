@@ -124,6 +124,9 @@ class SeqScanRule(BaseRule):
             )
             return recommendations
 
+        if not meta:
+            return recommendations
+
         # 소규모 테이블 필터 최우선 적용
         if meta.total_rows < 1000:
             recommendations.append(
