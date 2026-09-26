@@ -5,6 +5,7 @@ __pycache__/
 *.pyo
 *.spec
 .pytest_cache
+.codegraph/
 
 # PyInstaller build artifacts
 build/

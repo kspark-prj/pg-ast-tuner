@@ -14,12 +14,19 @@ class JITOverheadRule(BaseRule):
     DEFAULT_SEVERITY = "WARNING"
 
     def match(self, context: RuleContext, node: dict) -> bool:
-        # Node 자체에 JIT 정보가 들어있는지 확인
-        return "JIT" in node
+        if "JIT" in node:
+            return True
+        if context.plan_data and isinstance(context.plan_data, list) and len(context.plan_data) > 0:
+            return "JIT" in context.plan_data[0]
+        return False
 
     def analyze(self, context: RuleContext, node: dict) -> list[RecommendationModel]:
         recommendations = []
-        jit_info = node.get("JIT", {})
+        jit_info = node.get("JIT")
+        if not jit_info and context.plan_data and isinstance(context.plan_data, list) and len(context.plan_data) > 0:
+            jit_info = context.plan_data[0].get("JIT", {})
+        if not jit_info:
+            return recommendations
 
         timing = jit_info.get("Timing", {})
         generation_time = timing.get("Generation", 0.0)

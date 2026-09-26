@@ -26,6 +26,8 @@ def test_rule_discovery():
     assert "RULE_JOIN_007" in rule_ids  # CrossJoinRule
     assert "RULE_JOIN_008" in rule_ids  # ParallelJoinWorkerLossRule
     assert "RULE_JOIN_009" in rule_ids  # HashJoinBatchInflationRule
+    assert "RULE_JOIN_010" in rule_ids  # MemoizeCacheInefficiencyRule
+    assert "RULE_SCAN_009" in rule_ids  # BitmapMultiIndexInefficiencyRule
     assert "RULE_STAT_001" in rule_ids  # TempFileRule
     assert "RULE_STAT_002" in rule_ids  # ParallelWorkersRule
     assert "RULE_STAT_003" in rule_ids  # SortRule
@@ -33,14 +35,17 @@ def test_rule_discovery():
     assert "RULE_STAT_005" in rule_ids  # ParallelWorkerSkewRule
     assert "RULE_STAT_006" in rule_ids  # JITOverheadRule
     assert "RULE_STAT_007" in rule_ids  # IncrementalSortSpillRule
+    assert "RULE_STAT_008" in rule_ids  # WindowAggSortOverheadRule
     assert "RULE_SCAN_007" in rule_ids  # IndexFilterInefficiencyRule
     assert "RULE_SCAN_008" in rule_ids  # StaleVisibilityMapRule
     assert "RULE_MEM_001" in rule_ids   # ExcessiveWorkMemRule
     assert "RULE_MEM_002" in rule_ids   # BufferCacheMissRatioRule
+    assert "RULE_MEM_003" in rule_ids   # MaterializeSpillRule
     assert "RULE_STR_001" in rule_ids   # CTEInliningFailureRule
     assert "RULE_STR_002" in rule_ids   # ForeignTableScanRule
     assert "RULE_STR_003" in rule_ids   # ConstraintTriggerOverheadRule
     assert "RULE_STR_004" in rule_ids   # HotUpdateFailureRule
+    assert "RULE_STR_005" in rule_ids   # LockRowsOverheadRule
 
 def test_seq_scan_small_table():
     mock_provider = MagicMock()
@@ -387,6 +392,57 @@ def test_stale_visibility_map_rule_selective_filter():
     recs = rule.analyze(context, node_bloated)
     assert len(recs) == 1
     assert "블로팅(Bloat)" in recs[0].title
+
+
+def test_new_rules_execution():
+    from rules.join.MemoizeCacheInefficiencyRule import MemoizeCacheInefficiencyRule
+    from rules.scan.BitmapMultiIndexInefficiencyRule import BitmapMultiIndexInefficiencyRule
+    from rules.memory.MaterializeSpillRule import MaterializeSpillRule
+    from rules.statistics.WindowAggSortOverheadRule import WindowAggSortOverheadRule
+    from rules.structural.LockRowsOverheadRule import LockRowsOverheadRule
+
+    ctx = RuleContext("SELECT 1", "SELECT 1", MagicMock())
+
+    # 1. Memoize
+    memoize_rule = MemoizeCacheInefficiencyRule()
+    m_node = {"Node Type": "Memoize", "Cache Hits": 10, "Cache Misses": 50, "Cache Overflows": 2}
+    assert memoize_rule.match(ctx, m_node) is True
+    recs = memoize_rule.analyze(ctx, m_node)
+    assert len(recs) == 1
+    assert recs[0].rule_id == "RULE_JOIN_010" or "Memoize" in recs[0].title
+
+    # 2. BitmapMultiIndex
+    bitmap_rule = BitmapMultiIndexInefficiencyRule()
+    b_node = {"Node Type": "BitmapAnd", "Plans": [{"Node Type": "Bitmap Index Scan"}, {"Node Type": "Bitmap Index Scan"}]}
+    assert bitmap_rule.match(ctx, b_node) is True
+    recs = bitmap_rule.analyze(ctx, b_node)
+    assert len(recs) == 1
+    assert "BitmapAnd" in recs[0].title
+
+    # 3. Materialize
+    mat_rule = MaterializeSpillRule()
+    mat_node = {"Node Type": "Materialize", "Storage": "disk", "Peak Memory Usage": 2048}
+    assert mat_rule.match(ctx, mat_node) is True
+    recs = mat_rule.analyze(ctx, mat_node)
+    assert len(recs) == 1
+    assert "Materialize" in recs[0].title
+
+    # 4. WindowAgg
+    w_rule = WindowAggSortOverheadRule()
+    w_node = {"Node Type": "WindowAgg", "Plans": [{"Node Type": "Sort"}]}
+    assert w_rule.match(ctx, w_node) is True
+    recs = w_rule.analyze(ctx, w_node)
+    assert len(recs) == 1
+    assert "WindowAgg" in recs[0].title
+
+    # 5. LockRows
+    lock_rule = LockRowsOverheadRule()
+    lock_node = {"Node Type": "LockRows", "Plans": [{"Node Type": "Seq Scan"}]}
+    assert lock_rule.match(ctx, lock_node) is True
+    recs = lock_rule.analyze(ctx, lock_node)
+    assert len(recs) == 1
+    assert recs[0].severity == "CRITICAL"
+
 
 
 
