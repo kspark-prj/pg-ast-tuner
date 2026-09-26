@@ -52,30 +52,30 @@ project/
 
 ### 1. 스캔 진단 규칙 (SCAN Category)
 
-| 규칙 ID         | 규칙 클래스명                 | 진단 대상 노드              | 진단 및 권장 내용                                                                                                    |
-| :-------------- | :---------------------------- | :-------------------------- | :------------------------------------------------------------------------------------------------------------------- |
-| `RULE_SCAN_001` | `SeqScanRule`                 | Seq Scan                    | 풀 스캔 시 인덱스 누락, 소형 테이블 여부, OR 조건, LIKE 전방 와일드카드, 함수 가공(Index Suppression) 여부 종합 진단 |
-| `RULE_SCAN_002` | `IndexScanRule`               | Index Scan                  | 인덱스 스캔 사용 시 인덱스 적정성 진단 (과도한 인덱스 조회 등)                                                       |
-| `RULE_SCAN_003` | `BitmapHeapScanLossyRule`     | Bitmap Heap Scan            | `work_mem` 부족으로 인한 비트맵 Lossy 블록 전환 및 Recheck 힙 페이지 접근 진단                                       |
-| `RULE_SCAN_004` | `IndexOnlyScanHeapFetchRule`  | Index Only Scan             | Visibility Map 미갱신으로 인한 과도한 테이블 힙 접근(Heap Fetches) 진단                                              |
-| `RULE_SCAN_005` | `HighFilterRemovalRatioRule`  | Seq Scan, Index Scan 등     | 스캔 후 Filter 조건으로 버려지는 행(Rows Removed) 비율이 높아 발생하는 I/O 낭비 진단 (90% 이상 버려질 시)            |
-| `RULE_SCAN_006` | `SubqueryScanRepetitionRule`  | Subquery Scan               | 상관 서브쿼리나 미튜닝 스칼라 서브쿼리가 상위 루프만큼 반복 실행(N+1 스캔 병목)되는지 진단                           |
-| `RULE_SCAN_007` | `IndexFilterInefficiencyRule` | Index Scan, Index Only Scan | Index Cond이 아닌 Index Filter로 과도한 행이 스캔되는 비효율 진단 (선행 컬럼 Prefix Match 평가 포함)                 |
+| 규칙 ID         | 규칙 클래스명                 | 진단 대상 노드              | 진단 및 권장 내용                                                                                                                 |
+| :-------------- | :---------------------------- | :-------------------------- | :-------------------------------------------------------------------------------------------------------------------------------- |
+| `RULE_SCAN_001` | `SeqScanRule`                 | Seq Scan                    | 풀 스캔 시 인덱스 누락, 소형 테이블 여부, OR 조건, LIKE 전방 와일드카드, 함수 가공(Index Suppression) 여부 종합 진단              |
+| `RULE_SCAN_002` | `IndexScanRule`               | Index Scan                  | 인덱스 스캔 사용 시 인덱스 적정성 진단 (과도한 인덱스 조회 등)                                                                    |
+| `RULE_SCAN_003` | `BitmapHeapScanLossyRule`     | Bitmap Heap Scan            | `work_mem` 부족으로 인한 비트맵 Lossy 블록 전환 및 Recheck 힙 페이지 접근 진단                                                    |
+| `RULE_SCAN_004` | `IndexOnlyScanHeapFetchRule`  | Index Only Scan             | Visibility Map 미갱신으로 인한 과도한 테이블 힙 접근(Heap Fetches) 진단                                                           |
+| `RULE_SCAN_005` | `HighFilterRemovalRatioRule`  | Seq Scan, Index Scan 등     | 스캔 후 Filter 조건으로 버려지는 행(Rows Removed) 비율이 높아 발생하는 I/O 낭비 진단 (90% 이상 버려질 시)                         |
+| `RULE_SCAN_006` | `SubqueryScanRepetitionRule`  | Subquery Scan               | 상관 서브쿼리나 미튜닝 스칼라 서브쿼리가 상위 루프만큼 반복 실행(N+1 스캔 병목)되는지 진단                                        |
+| `RULE_SCAN_007` | `IndexFilterInefficiencyRule` | Index Scan, Index Only Scan | Index Cond이 아닌 Index Filter로 과도한 행이 스캔되는 비효율 진단 (선행 컬럼 Prefix Match 평가 포함)                              |
 | `RULE_SCAN_008` | `StaleVisibilityMapRule`      | Seq Scan, Bitmap Heap Scan  | 데드 튜플(Dead Tuples) 및 테이블 블로트(Bloat)로 인한 불필요한 I/O 대량 발생 진단 (선택도 필터링을 반영한 Live 행 밀도 연산 적용) |
 
 ### 2. 조인 진단 규칙 (JOIN Category)
 
-| 규칙 ID         | 규칙 클래스명                      | 진단 대상 노드         | 진단 및 권장 내용                                                                                               |
-| :-------------- | :--------------------------------- | :--------------------- | :-------------------------------------------------------------------------------------------------------------- |
-| `RULE_JOIN_001` | `HashJoinRule`                     | Hash Join              | 해시 테이블 빌드 크기가 `work_mem`을 초과하여 디스크로 임시 스필(Spill)되었는지 감지                            |
-| `RULE_JOIN_002` | `NestedLoopRule`                   | Nested Loop            | 내부 드라이븐 테이블(Driven Table)에 조인 키 인덱스가 없어 반복적인 풀 스캔이 유발되는지 진단                   |
-| `RULE_JOIN_003` | `MergeJoinSortRule`                | Merge Join             | 정렬된 입력이 필요한 Merge Join에서 하위 노드에 인덱스가 없어 명시적 Sort 연산이 발생하는지 진단                |
-| `RULE_JOIN_004` | `NestedLoopHighLoopsRule`          | Nested Loop            | 내부 테이블 반복 탐색 횟수(Loops)가 과도하게 많아(10만회 이상) 발생하는 랜덤 I/O 및 CPU 부하 진단               |
-| `RULE_JOIN_005` | `HashJoinLargeBuildTableRule`      | Hash Join              | 통계 정보 불일치 등으로 인해 더 작은 집합이 아닌 대량 데이터 테이블이 해시 빌드(Build Side)로 지정되었는지 진단 |
-| `RULE_JOIN_006` | `JoinCardinalityMisestimationRule` | Hash/NL/Merge Join     | 옵티마이저 예측 행 수(Plan Rows)와 실제 처리 행 수(Actual Rows) 간 10배 이상의 큰 카디널리티 오차 진단          |
+| 규칙 ID         | 규칙 클래스명                      | 진단 대상 노드         | 진단 및 권장 내용                                                                                                                              |
+| :-------------- | :--------------------------------- | :--------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RULE_JOIN_001` | `HashJoinRule`                     | Hash Join              | 해시 테이블 빌드 크기가 `work_mem`을 초과하여 디스크로 임시 스필(Spill)되었는지 감지                                                           |
+| `RULE_JOIN_002` | `NestedLoopRule`                   | Nested Loop            | 내부 드라이븐 테이블(Driven Table)에 조인 키 인덱스가 없어 반복적인 풀 스캔이 유발되는지 진단                                                  |
+| `RULE_JOIN_003` | `MergeJoinSortRule`                | Merge Join             | 정렬된 입력이 필요한 Merge Join에서 하위 노드에 인덱스가 없어 명시적 Sort 연산이 발생하는지 진단                                               |
+| `RULE_JOIN_004` | `NestedLoopHighLoopsRule`          | Nested Loop            | 내부 테이블 반복 탐색 횟수(Loops)가 과도하게 많아(10만회 이상) 발생하는 랜덤 I/O 및 CPU 부하 진단                                              |
+| `RULE_JOIN_005` | `HashJoinLargeBuildTableRule`      | Hash Join              | 통계 정보 불일치 등으로 인해 더 작은 집합이 아닌 대량 데이터 테이블이 해시 빌드(Build Side)로 지정되었는지 진단                                |
+| `RULE_JOIN_006` | `JoinCardinalityMisestimationRule` | Hash/NL/Merge Join     | 옵티마이저 예측 행 수(Plan Rows)와 실제 처리 행 수(Actual Rows) 간 10배 이상의 큰 카디널리티 오차 진단                                         |
 | `RULE_JOIN_007` | `CrossJoinRule`                    | Nested Loop, Hash Join | 조인 조건이 누락되거나 잘못 설정되어 발생하는 카티시안 곱(Cartesian Product, Cross Join) 진단 (매개변수화된 Parameterized NL 조인 필터링 적용) |
-| `RULE_JOIN_008` | `ParallelJoinWorkerLossRule`       | Gather, Gather Merge   | 병렬 조인 수행 시 계획된 워커 수보다 실제 실행 시 할당된 워커 수(Workers Launched)가 부족한 현상 진단           |
-| `RULE_JOIN_009` | `HashJoinBatchInflationRule`       | Hash Join              | 빌드 데이터 예측 실패로 인해 실행 중 해시 배치 수가 최초 예상보다 동적으로 폭증(8배 이상)했는지 진단            |
+| `RULE_JOIN_008` | `ParallelJoinWorkerLossRule`       | Gather, Gather Merge   | 병렬 조인 수행 시 계획된 워커 수보다 실제 실행 시 할당된 워커 수(Workers Launched)가 부족한 현상 진단                                          |
+| `RULE_JOIN_009` | `HashJoinBatchInflationRule`       | Hash Join              | 빌드 데이터 예측 실패로 인해 실행 중 해시 배치 수가 최초 예상보다 동적으로 폭증(8배 이상)했는지 진단                                           |
 
 ### 3. 통계 및 리소스 진단 규칙 (STATISTICS Category)
 
@@ -247,6 +247,6 @@ python -m PyInstaller main.spec
 Spec 파일 없이 명령어로 직접 빌드하는 경우, `psycopg` 모듈의 동적 바인딩 파일들을 수집하도록 `--collect-all` 옵션을 반드시 포함해야 합니다.
 
 ```bash
-python -m PyInstaller --clean --noconfirm -w -D --icon=main.ico --add-data "splash.png;." --collect-all psycopg --collect-all sqlglot --collect-all rules --exclude-module pytest --exclude-module matplotlib --exclude-module tkinter.test --exclude-module PyQt5 --exclude-module PyQt6 --exclude-module PySide2 --exclude-module PySide6 --exclude-module scipy --exclude-module pandas --exclude-module IPython --exclude-module notebook --exclude-module tornado main.py
+uv run python -m PyInstaller --clean --noconfirm -w -D --icon=main.ico --add-data "splash.png;." --collect-all psycopg --collect-all sqlglot --collect-all rules --exclude-module pytest --exclude-module matplotlib --exclude-module tkinter.test --exclude-module PyQt5 --exclude-module PyQt6 --exclude-module PySide2 --exclude-module PySide6 --exclude-module scipy --exclude-module pandas --exclude-module IPython --exclude-module notebook --exclude-module tornado main.py
 
 ```
