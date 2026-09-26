@@ -444,5 +444,125 @@ def test_new_rules_execution():
     assert recs[0].severity == "CRITICAL"
 
 
+def test_recommendation_deduplication():
+    from models.recommendation import RecommendationModel
+
+    rec1 = RecommendationModel(
+        rule_id="RULE_STAT_001",
+        title="디스크 임시 파일 쓰기 발생",
+        description="임시 파일 쓰기가 발생했습니다 (15176 KB).",
+        severity="WARNING",
+        priority=2,
+        reason="work_mem 부족으로 임시 파일 생성",
+        recommendation="work_mem 상향 조정",
+        recommended_sql="SET work_mem = '64MB';",
+        plan_node="Hash Join",
+    )
+    rec2 = RecommendationModel(
+        rule_id="RULE_STAT_001",
+        title="디스크 임시 파일 쓰기 발생",
+        description="임시 파일 쓰기가 발생했습니다 (5728 KB).",
+        severity="WARNING",
+        priority=2,
+        reason="work_mem 부족으로 임시 파일 생성",
+        recommendation="work_mem 상향 조정",
+        recommended_sql="SET work_mem = '64MB';",
+        plan_node="Hash",
+    )
+
+    recs = [rec1, rec2]
+    deduped = RuleEngine.deduplicate_recommendations(recs)
+    assert len(deduped) == 1
+    assert deduped[0].rule_id == "RULE_STAT_001"
+
+
+def test_assign_line_numbers_and_formatting():
+    from core.parser import PGPlanAnalyzer
+
+    raw_explain = (
+        "Hash Join  (cost=1.23..4.56 rows=100 width=32)\n"
+        "  Hash Cond: (t1.id = t2.t1_id)\n"
+        "  ->  Seq Scan on t1  (cost=0.00..2.20 rows=100 width=16)\n"
+        "  ->  Hash  (cost=1.00..1.00 rows=10 width=16)\n"
+        "        ->  Seq Scan on t2  (cost=0.00..1.00 rows=10 width=16)"
+    )
+
+    root_plan = {
+        "Node Type": "Hash Join",
+        "Plans": [
+            {"Node Type": "Seq Scan", "Relation Name": "t1"},
+            {
+                "Node Type": "Hash",
+                "Plans": [
+                    {"Node Type": "Seq Scan", "Relation Name": "t2"}
+                ]
+            }
+        ]
+    }
+
+    PGPlanAnalyzer.assign_line_numbers(root_plan, raw_explain)
+
+    assert root_plan["_line_number"] == 1
+    assert root_plan["Plans"][0]["_line_number"] == 3
+    assert root_plan["Plans"][1]["_line_number"] == 4
+    assert root_plan["Plans"][1]["Plans"][0]["_line_number"] == 5
+
+    formatted = PGPlanAnalyzer.format_explain_with_line_numbers(raw_explain)
+    assert "Line  1 | Hash Join" in formatted
+    assert "Line  3 |   ->  Seq Scan on t1" in formatted
+
+
+def test_recommendation_line_mapping_integration():
+    from core.parser import PGPlanAnalyzer
+    from core.engine import RuleEngine
+    
+    mock_provider = MagicMock()
+    mock_provider.get_table_metadata.return_value = TableMetadata(
+        table_name="t1",
+        total_rows=100000,
+        indices=[]
+    )
+    
+    raw_explain = (
+        "Hash Join  (cost=1.23..4.56 rows=100 width=32)\n"
+        "  Hash Cond: (t1.id = t2.t1_id)\n"
+        "  ->  Seq Scan on t1  (cost=0.00..2.20 rows=100 width=16)\n"
+        "  ->  Hash  (cost=1.00..1.00 rows=10 width=16)\n"
+        "        ->  Seq Scan on t2  (cost=0.00..1.00 rows=10 width=16)"
+    )
+    
+    root_plan = {
+        "Node Type": "Hash Join",
+        "Plans": [
+            {"Node Type": "Seq Scan", "Relation Name": "t1", "Actual Rows": 100},
+            {
+                "Node Type": "Hash",
+                "Plans": [
+                    {"Node Type": "Seq Scan", "Relation Name": "t2", "Actual Rows": 100}
+                ]
+            }
+        ]
+    }
+    
+    PGPlanAnalyzer.assign_line_numbers(root_plan, raw_explain)
+    
+    context = RuleContext(
+        raw_query="SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id",
+        clean_query="SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id",
+        metadata_provider=mock_provider
+    )
+    
+    engine = RuleEngine(mock_provider)
+    seq_node = root_plan["Plans"][0]
+    recs = engine.analyze_node(context, seq_node)
+    
+    assert len(recs) > 0
+    assert recs[0].plan_line == 3
+    assert 3 in recs[0].plan_lines
+
+
+
+
+
 
 

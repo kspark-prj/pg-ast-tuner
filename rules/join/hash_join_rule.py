@@ -17,7 +17,10 @@ class HashJoinRule(BaseRule):
     def analyze(self, context: RuleContext, node: dict) -> list[RecommendationModel]:
         recommendations = []
         node_type = node.get("Node Type", "Hash Join")
-        hash_batches = node.get("Hash Batches", 1)
+        
+        # PostgreSQL EXPLAIN JSON에서 Hash Batches는 하위 Hash 노드에 위치함
+        hash_node = next((p for p in node.get("Plans", []) if p.get("Node Type") == "Hash"), node)
+        hash_batches = hash_node.get("Hash Batches", node.get("Hash Batches", 1))
 
         if hash_batches > 1:
             recommendations.append(

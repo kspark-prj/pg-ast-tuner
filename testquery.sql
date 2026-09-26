@@ -1,8 +1,8 @@
 -- ==============================================================================
--- PostgreSQL 성능 진단 룰(Join & Scan Package) 검증용 통합 SQL 스크립트
+-- PostgreSQL 성능 진단 룰(Total 35 Rules) 순수 SQL 검증 스크립트
 -- ==============================================================================
--- 본 스크립트는 이미지에 명시된 join 및 scan 패키지 내 각 룰(Rule)들의
--- 진단 조건(Rule Condition)을 정확하게 유도하여 테스트하기 위한 DDL/DML/DQL 세트입니다.
+-- 본 스크립트는 pg-ast-tuner의 EXPLAIN 분석 엔진에 직접 입력하여 테스트할 수 있도록
+-- EXPLAIN 키워드 및 GUC 제어문(SET/RESET)을 제거하고 순수 SQL 구문으로만 구성되었습니다.
 -- ==============================================================================
 
 --------------------------------------------------------------------------------
@@ -94,15 +94,79 @@ ANALYZE test_users;
 ANALYZE test_orders;
 ANALYZE test_lineitems;
 
-================================================================================
--- PART 1. JOIN PACKAGE RULES TEST (join/)
-================================================================================
+
+-- ==============================================================================
+-- PART 1. JOIN PACKAGE RULES TEST (rules/join/)
+-- ==============================================================================
 
 --------------------------------------------------------------------------------
--- 1-1. CrossJoinRule.py
--- 목적: 조인 조건이 누락되거나 카테시안 곱(Cartesian Product)이 발생하는 Nested Loop / Cross Join 감지
+-- 1-1. HashJoinRule.py (RULE_JOIN_001) / SeqScanRule.py (RULE_SCAN_001)
+-- 진단 룰 매핑 분석:
+--  - 기본 세션 상태(work_mem >= 4MB): 해시 조인이 메모리 내(Batches=1)에서 완료되어
+--    테이블 전체 스캔에 대한 RULE_SCAN_001 가이드가 출력됩니다.
+--  - work_mem 부족 상태(SET work_mem = '64kB';): 해시 테이블 빌드 시 디스크 스필(Batches > 1)이
+--    발생하여 RULE_JOIN_001(해시 조인 디스크 스필) 룰이 함께 검출됩니다.
 --------------------------------------------------------------------------------
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
+SELECT o.order_id, o.order_amount, l.item_name
+FROM test_orders o
+JOIN test_lineitems l ON o.order_id = l.order_id;
+
+
+--------------------------------------------------------------------------------
+-- 1-2. nested_loop_rule.py (RULE_JOIN_002)
+-- 진단 룰 매핑 분석:
+--  - 옵티마이저가 Nested Loop 결합 방식을 유도하도록 단일 행 서치(WHERE order_id = 100) 및
+--    비인덱스 컬럼(order_amount = user_id) 조인을 수행합니다.
+--  - 내부 드라이븐 테이블(test_users)에 대해 반복 풀 스캔이 발생하여 RULE_JOIN_002 룰이 진단됩니다.
+--------------------------------------------------------------------------------
+SELECT o.order_id, u.username
+FROM test_orders o
+JOIN test_users u ON o.order_amount = u.user_id
+WHERE o.order_id = 100;
+
+
+--------------------------------------------------------------------------------
+-- 1-3. MergeJoinSortRule.py (RULE_JOIN_003)
+-- 목적: Merge Join 수행 전 인덱스 부재로 인한 Explicit Sort 발생 케이스
+--------------------------------------------------------------------------------
+SELECT o.order_id, u.user_id
+FROM test_orders o
+JOIN test_users u ON o.order_amount = u.user_id;
+
+
+--------------------------------------------------------------------------------
+-- 1-4. NestedLoopHighLoopsRule.py (RULE_JOIN_004)
+-- 목적: Nested Loop 발생 시 Outer/Inner Loop 반복 횟수(Loops)가 과도하게 높은 케이스 탐지
+--------------------------------------------------------------------------------
+SELECT l.lineitem_id, u.username
+FROM test_lineitems l
+JOIN test_orders o ON l.order_id = o.order_id
+JOIN test_users u ON o.user_id = u.user_id
+WHERE l.price > 95.00;
+
+
+--------------------------------------------------------------------------------
+-- 1-5. HashJoinLargeBuildTableRule.py (RULE_JOIN_005)
+-- 목적: Hash Join 시 Build Side(오른쪽 자식)에 대용량 테이블이 배치되는 현상 탐지
+--------------------------------------------------------------------------------
+SELECT o.order_id, u.username
+FROM test_users u
+JOIN test_orders o ON u.user_id = o.user_id;
+
+
+--------------------------------------------------------------------------------
+-- 1-6. JoinCardinalityMisestimationRule.py (RULE_JOIN_006)
+-- 목적: 조인 조건 함수 가공(UPPER 등)으로 옵티마이저의 예상 행 수와 실제 행 수 오차 발생
+--------------------------------------------------------------------------------
+SELECT o.order_id, u.username
+FROM test_orders o
+JOIN test_users u ON UPPER(o.order_status) = UPPER(u.user_category);
+
+
+--------------------------------------------------------------------------------
+-- 1-7. CrossJoinRule.py (RULE_JOIN_007)
+-- 목적: 조인 조건 누락 및 카테시안 곱(Cartesian Product) 발생 감지
+--------------------------------------------------------------------------------
 SELECT u.username, o.order_id
 FROM test_users u
 CROSS JOIN test_orders o
@@ -110,121 +174,235 @@ LIMIT 100;
 
 
 --------------------------------------------------------------------------------
--- 1-2. hash_join_rule.py & HashJoinLargeBuildTableRule.py
--- 목적: Hash Join 발생 검증 및 Build Side(오른쪽 자식)에 대용량 테이블이 배치되는 현상 탐지
+-- 1-8. ParallelJoinWorkerLossRule.py (RULE_JOIN_008)
+-- 목적: 병렬 조인(Parallel Join) 실행 시 Worker 미활용 또는 손실 케이스
 --------------------------------------------------------------------------------
--- Enable Hash Join explicitly
-SET enable_nestloop = off;
-SET enable_mergejoin = off;
-
--- u(작은 테이블)와 o(대형 테이블) 조인 시 o가 Build Table로 선택되도록 유도 (혹은 Large Table 간 Hash Join)
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
-SELECT o.order_id, o.order_amount, u.username
-FROM test_orders o
-JOIN test_users u ON o.user_id = u.user_id;
-
-RESET enable_nestloop;
-RESET enable_mergejoin;
-
-
---------------------------------------------------------------------------------
--- 1-3. HashJoinBatchInflationRule.py
--- 목적: work_mem 부족으로 인해 Hash Join 시 디스크 스필(Batches > 1) 발생하는 케이스
---------------------------------------------------------------------------------
-SET work_mem = '64kB';
-
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
-SELECT o.order_id, o.order_amount, l.item_name
-FROM test_orders o
-JOIN test_lineitems l ON o.order_id = l.order_id;
-
-RESET work_mem;
-
-
---------------------------------------------------------------------------------
--- 1-4. JoinCardinalityMisestimationRule.py
--- 목적: 옵티마이저의 예상 조인 행 수(Plan Rows)와 실제 조인 행 수(Actual Rows) 간의 큰 오차 검증
---------------------------------------------------------------------------------
--- UPPER 가공 등으로 조인 조건의 카디널리티 추정을 무력화
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
-SELECT o.order_id, u.username
-FROM test_orders o
-JOIN test_users u ON UPPER(o.order_status) = UPPER(u.user_category);
-
-
---------------------------------------------------------------------------------
--- 1-5. MergeJoinSortRule.py
--- 목적: Merge Join 수행 전 정렬 단계(Explicit Sort)가 발생하여 CPU/메모리 부하가 가중되는 케이스
---------------------------------------------------------------------------------
-SET enable_hashjoin = off;
-SET enable_nestloop = off;
-
--- order_amount 컬럼은 인덱스가 없으므로 Merge Join을 위해 Explicit Sort 필요
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
-SELECT o.order_id, u.user_id
-FROM test_orders o
-JOIN test_users u ON o.order_amount = u.user_id;
-
-RESET enable_hashjoin;
-RESET enable_nestloop;
-
-
---------------------------------------------------------------------------------
--- 1-6. nested_loop_rule.py & NestedLoopHighLoopsRule.py
--- 목적: Nested Loop 발생 탐지 및 Outer Loop/Inner Loop 반복 횟수(Loops)가 과도하게 높은 케이스 탐지
---------------------------------------------------------------------------------
-SET enable_hashjoin = off;
-SET enable_mergejoin = off;
-
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
-SELECT o.order_id, u.username
-FROM test_orders o
-JOIN test_users u ON o.user_id = u.user_id
-WHERE o.order_amount > 100;
-
-RESET enable_hashjoin;
-RESET enable_mergejoin;
-
-
---------------------------------------------------------------------------------
--- 1-7. ParallelJoinWorkerLossRule.py
--- 목적: 병렬 조인(Parallel Join) 실행 시 계획된 Worker 수보다 실제 작동한 Worker 수가 적거나 0인 케이스
---------------------------------------------------------------------------------
-SET max_parallel_workers_per_gather = 4;
-SET force_parallel_mode = on;
-
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
 SELECT count(*), avg(o.order_amount)
 FROM test_orders o
 JOIN test_lineitems l ON o.order_id = l.order_id;
 
-RESET max_parallel_workers_per_gather;
-RESET force_parallel_mode;
-
-
-================================================================================
--- PART 2. SCAN PACKAGE RULES TEST (scan/)
-================================================================================
 
 --------------------------------------------------------------------------------
--- 2-1. BitmapHeapScanLossyRule.py
--- 목적: work_mem 부족으로 Bitmap Scan 시 Lossy Pages(손실 페이지) 및 Recheck 조건이 발생하는 케이스
+-- 1-9. HashJoinBatchInflationRule.py (RULE_JOIN_009)
+-- 목적: Hash Join 시 메모리 부족으로 디스크 스필(Batches > 1) 및 동적 배치 확장 케이스
 --------------------------------------------------------------------------------
-SET work_mem = '64kB';
+SELECT o.order_id, o.order_amount, l.item_name
+FROM test_orders o
+JOIN test_lineitems l ON o.order_id = l.order_id;
 
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
+
+--------------------------------------------------------------------------------
+-- 1-10. MemoizeCacheInefficiencyRule.py (RULE_JOIN_010)
+-- 목적: Memoize 노드의 Cache Misses 및 털어내기 비효율 탐지
+--------------------------------------------------------------------------------
+SELECT o.order_id,
+       (SELECT u.username FROM test_users u WHERE u.user_id = o.user_id)
+FROM test_orders o
+LIMIT 1000;
+
+
+-- ==============================================================================
+-- PART 2. SCAN PACKAGE RULES TEST (rules/scan/)
+-- ==============================================================================
+
+--------------------------------------------------------------------------------
+-- 2-1. seq_scan_rule.py (RULE_SCAN_001)
+-- 목적: 전체 테이블 스캔(Seq Scan) 및 좌변 가공(UPPER)으로 인한 인덱스 무력화 감지
+--------------------------------------------------------------------------------
+SELECT *
+FROM test_orders
+WHERE UPPER(order_status) = 'PENDING';
+
+
+--------------------------------------------------------------------------------
+-- 2-2. index_scan_rule.py (RULE_SCAN_002)
+-- 목적: Index Scan 발생 및 비효율적 데이터 추출 탐지
+--------------------------------------------------------------------------------
+SELECT *
+FROM test_orders
+WHERE order_date >= NOW() - INTERVAL '1 day';
+
+
+--------------------------------------------------------------------------------
+-- 2-3. BitmapHeapScanLossyRule.py (RULE_SCAN_003)
+-- 목적: Bitmap Scan 시 Lossy Pages(손실 페이지) 및 Recheck 조건 발생 탐지
+--------------------------------------------------------------------------------
 SELECT *
 FROM test_orders
 WHERE user_id BETWEEN 1 AND 800;
 
-RESET work_mem;
+
+--------------------------------------------------------------------------------
+-- 2-4. IndexOnlyScanHeapFetchRule.py (RULE_SCAN_004)
+-- 목적: Index Only Scan 수행 시 Visibility Map 미갱신으로 Heap Fetches가 다수 발생하는 케이스
+--------------------------------------------------------------------------------
+SELECT order_status, order_amount
+FROM test_orders
+WHERE order_status = 'COMPLETED';
 
 
 --------------------------------------------------------------------------------
--- 2-2. CTEInliningFailureRule.py
--- 목적: CTE(WITH절) 사용 시 AS MATERIALIZED 옵션 등으로 인라인화가 금지되어 Subquery Scan/Materialize 발생
+-- 2-5. HighFilterRemovalRatioRule.py (RULE_SCAN_005)
+-- 목적: Filter 단계에서 버려지는 비율(Filter Removal Ratio)이 90% 이상인 케이스
 --------------------------------------------------------------------------------
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
+SELECT *
+FROM test_orders
+WHERE order_status = 'PENDING'
+  AND order_amount > 490.00;
+
+
+--------------------------------------------------------------------------------
+-- 2-6. SubqueryScanRepetitionRule.py (RULE_SCAN_006)
+-- 목적: 상관 서브쿼리로 인해 Subquery Scan / SubPlan 노드가 반복 실행되는 케이스
+--------------------------------------------------------------------------------
+SELECT u.user_id,
+       (SELECT COUNT(*) FROM test_orders o WHERE o.user_id = u.user_id AND o.order_amount > 200) AS high_orders
+FROM test_users u;
+
+
+--------------------------------------------------------------------------------
+-- 2-7. IndexFilterInefficiencyRule.py (RULE_SCAN_007)
+-- 목적: Index Scan 내에서 Index Filter로 인해 대량 행이 제거되는 비효율 탐지
+--------------------------------------------------------------------------------
+SELECT *
+FROM test_orders
+WHERE order_status = 'COMPLETED'
+  AND padding LIKE 'A%';
+
+
+--------------------------------------------------------------------------------
+-- 2-8. StaleVisibilityMapRule.py (RULE_SCAN_008)
+-- 목적: 대량 UPDATE/INSERT 후 VACUUM 미수행으로 블로팅(Bloat) 발생 탐지
+--------------------------------------------------------------------------------
+SELECT user_id
+FROM test_orders
+WHERE user_id BETWEEN 1 AND 100;
+
+
+--------------------------------------------------------------------------------
+-- 2-9. BitmapMultiIndexInefficiencyRule.py (RULE_SCAN_009)
+-- 목적: 단일 복합 인덱스 대신 다수의 인덱스 비트맵(BitmapAnd / BitmapOr)을 결합하는 케이스
+--------------------------------------------------------------------------------
+SELECT *
+FROM test_orders
+WHERE user_id = 500
+   OR order_date = NOW() - INTERVAL '10 days';
+
+
+-- ==============================================================================
+-- PART 3. MEMORY PACKAGE RULES TEST (rules/memory/ & rules/statistics/)
+-- ==============================================================================
+
+--------------------------------------------------------------------------------
+-- 3-1. ExcessiveWorkMemRule.py (RULE_MEM_001)
+-- 목적: 과도하게 높은 work_mem 설정으로 OOM 위험을 유발하는 케이스
+--------------------------------------------------------------------------------
+SELECT order_status, COUNT(*)
+FROM test_orders
+GROUP BY order_status;
+
+
+--------------------------------------------------------------------------------
+-- 3-2. BufferCacheMissRatioRule.py (RULE_MEM_002)
+-- 목적: Shared Buffers 메모리 히트율이 낮고 디스크 Read I/O가 대량 발생하는 케이스
+--------------------------------------------------------------------------------
+SELECT *
+FROM test_lineitems
+WHERE padding LIKE 'XYZ%';
+
+
+--------------------------------------------------------------------------------
+-- 3-3. MaterializeSpillRule.py (RULE_MEM_003)
+-- 목적: Materialize 노드의 디스크 스필(Storage: disk) 또는 메모리 낭비 케이스
+--------------------------------------------------------------------------------
+SELECT *
+FROM test_users u
+JOIN test_lineitems l ON u.user_id = l.order_id;
+
+
+-- ==============================================================================
+-- PART 4. STATISTICS PACKAGE RULES TEST (rules/statistics/)
+-- ==============================================================================
+
+--------------------------------------------------------------------------------
+-- 4-1. temp_file_rule.py (RULE_STAT_001)
+-- 목적: 쿼리 실행 중 임시 파일(Temp Written Blocks) 생성을 유발하는 정렬/집계 쿼리
+--------------------------------------------------------------------------------
+SELECT *
+FROM test_orders
+ORDER BY padding;
+
+
+--------------------------------------------------------------------------------
+-- 4-2. parallel_workers_rule.py (RULE_STAT_002)
+-- 목적: 병렬 쿼리 Gather 노드의 Worker 할당 및 실행 효율성 검증
+--------------------------------------------------------------------------------
+SELECT COUNT(*), AVG(order_amount)
+FROM test_orders;
+
+
+--------------------------------------------------------------------------------
+-- 4-3. sort_rule.py (RULE_STAT_003)
+-- 목적: 인덱스 부재로 인한 Explicit Sort 및 External Sort 탐지
+--------------------------------------------------------------------------------
+SELECT *
+FROM test_orders
+ORDER BY order_amount DESC;
+
+
+--------------------------------------------------------------------------------
+-- 4-4. DiskHashAggRule.py (RULE_STAT_004)
+-- 목적: HashAggregate 수행 중 디스크 기반 해시 집계(Disk-based HashAgg) 스필 케이스
+--------------------------------------------------------------------------------
+SELECT order_id, COUNT(*), AVG(price)
+FROM test_lineitems
+GROUP BY order_id;
+
+
+--------------------------------------------------------------------------------
+-- 4-5. ParallelWorkerSkewRule.py (RULE_STAT_005)
+-- 목적: 병렬 Worker 간 데이터 처리 편향(Worker Skew) 현상 탐지
+--------------------------------------------------------------------------------
+SELECT user_id, COUNT(*)
+FROM test_orders
+GROUP BY user_id;
+
+
+--------------------------------------------------------------------------------
+-- 4-6. JITOverheadRule.py (RULE_STAT_006)
+-- 목적: JIT(Just-In-Time) 컴파일 시간 비중이 실행 시간 대비 과도한 비효율 탐지
+--------------------------------------------------------------------------------
+SELECT order_status, AVG(order_amount), COUNT(*)
+FROM test_orders
+GROUP BY order_status;
+
+
+--------------------------------------------------------------------------------
+-- 4-7. IncrementalSortSpillRule.py (RULE_STAT_007)
+-- 목적: 부분 정렬(Incremental Sort) 수행 중 디스크 스필 발생하는 케이스
+--------------------------------------------------------------------------------
+SELECT user_id, order_date, order_amount
+FROM test_orders
+ORDER BY user_id, order_amount;
+
+
+--------------------------------------------------------------------------------
+-- 4-8. WindowAggSortOverheadRule.py (RULE_STAT_008)
+-- 목적: WindowAgg(윈도우 함수) 사용 시 PARTITION BY / ORDER BY 정렬 오버헤드 탐지
+--------------------------------------------------------------------------------
+SELECT order_id, user_id, order_amount,
+       ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY order_amount DESC) as rn
+FROM test_orders;
+
+
+-- ==============================================================================
+-- PART 5. STRUCTURAL PACKAGE RULES TEST (rules/structural/ & rules/scan/ & rules/statistics/)
+-- ==============================================================================
+
+--------------------------------------------------------------------------------
+-- 5-1. CTEInliningFailureRule.py (RULE_STR_001)
+-- 목적: WITH절(CTE)에 AS MATERIALIZED 지정으로 Subquery Scan/Materialize 발생 케이스
+--------------------------------------------------------------------------------
 WITH cted_orders AS MATERIALIZED (
     SELECT user_id, order_amount
     FROM test_orders
@@ -236,85 +414,36 @@ GROUP BY user_id;
 
 
 --------------------------------------------------------------------------------
--- 2-3. ForeignTableScanRule.py
+-- 5-2. ForeignTableScanRule.py (RULE_STR_002)
 -- 목적: FDW(Foreign Data Wrapper) 외부 테이블 스캔(Foreign Scan) 발생 탐지
 --------------------------------------------------------------------------------
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
 SELECT * FROM test_foreign_orders WHERE order_amount > 100;
 
 
 --------------------------------------------------------------------------------
--- 2-4. HighFilterRemovalRatioRule.py
--- 목적: 스캔 노드에서 읽은 전체 행 대비 Filter 단계에서 버려지는 비율(Filter Removal Ratio)이 90% 이상인 케이스
+-- 5-3. ConstraintTriggerOverheadRule.py (RULE_STR_003)
+-- 목적: DML(INSERT/UPDATE/DELETE) 실행 시 트리거 및 FK 검증 오버헤드 탐지
 --------------------------------------------------------------------------------
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
+INSERT INTO test_lineitems (order_id, item_name, price, quantity)
+SELECT order_id, 'BulkItem', 10.00, 1
+FROM test_orders
+WHERE order_id <= 1000;
+
+
+--------------------------------------------------------------------------------
+-- 5-4. HotUpdateFailureRule.py (RULE_STR_004)
+-- 목적: UPDATE 시 인덱스 컬럼 수정 등으로 HOT(Heap-Only Tuple) 최적화 실패 감지
+--------------------------------------------------------------------------------
+UPDATE test_orders
+SET order_status = 'COMPLETED'
+WHERE user_id BETWEEN 1 AND 500;
+
+
+--------------------------------------------------------------------------------
+-- 5-5. LockRowsOverheadRule.py (RULE_STR_005)
+-- 목적: SELECT FOR UPDATE (LockRows) 수행 시 풀 스캔에 의한 잠금 오버헤드 탐지
+--------------------------------------------------------------------------------
 SELECT *
 FROM test_orders
-WHERE order_status = 'PENDING'
-  AND order_amount > 490.00;
-
-
---------------------------------------------------------------------------------
--- 2-5. index_scan_rule.py
--- 목적: 일반적인 Index Scan / Index Scan Backward 노드 탐지
---------------------------------------------------------------------------------
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
-SELECT *
-FROM test_orders
-WHERE order_date >= NOW() - INTERVAL '1 day';
-
-
---------------------------------------------------------------------------------
--- 2-6. IndexFilterInefficiencyRule.py
--- 목적: Index Scan 내부에서 Index Cond 이외에 추가적인 Filter(Index Filter)로 대량의 데이터가 제거되는 비효율 탐지
---------------------------------------------------------------------------------
--- 복합 인덱스 (order_status, order_amount) 활용
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
-SELECT *
-FROM test_orders
-WHERE order_status = 'COMPLETED'
-  AND padding LIKE 'A%';
-
-
---------------------------------------------------------------------------------
--- 2-7. IndexOnlyScanHeapFetchRule.py
--- 목적: Index Only Scan으로 계획되었으나 Visibility Map 미갱신 등으로 실제 Heap Fetches가 다수 발생하는 케이스
---------------------------------------------------------------------------------
--- VACUUM이 실행되지 않은 상태에서 인덱스 컬럼만 조회
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
-SELECT order_status, order_amount
-FROM test_orders
-WHERE order_status = 'COMPLETED';
-
-
---------------------------------------------------------------------------------
--- 2-8. seq_scan_rule.py
--- 목적: 전체 테이블 스캔(Seq Scan) 발생 및 좌변 가공(UPPER, DATE 등)으로 인한 인덱스 무력화 감지
---------------------------------------------------------------------------------
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
-SELECT *
-FROM test_orders
-WHERE UPPER(order_status) = 'PENDING';
-
-
---------------------------------------------------------------------------------
--- 2-9. StaleVisibilityMapRule.py
--- 목적: 대량 UPDATE/INSERT 이후 VACUUM 미수행으로 Visibility Map이 최신화되지 않아 발생되는 문제 탐지
---------------------------------------------------------------------------------
--- 대량 업데이트 후 VACUUM 없이 Index Only Scan 수행 유도
-UPDATE test_orders SET order_amount = order_amount + 1 WHERE order_id <= 50000;
-
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
-SELECT user_id
-FROM test_orders
-WHERE user_id BETWEEN 1 AND 100;
-
-
---------------------------------------------------------------------------------
--- 2-10. SubqueryScanRepetitionRule.py
--- 목적: Subquery Scan 노드가 반복 실행되거나 상관 서브쿼리(Correlated Subquery)로 인한 과도한 Scan 발생
---------------------------------------------------------------------------------
-EXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)
-SELECT u.user_id,
-       (SELECT COUNT(*) FROM test_orders o WHERE o.user_id = u.user_id AND o.order_amount > 200) AS high_orders
-FROM test_users u;
+WHERE padding LIKE 'A%'
+FOR UPDATE;

@@ -267,3 +267,68 @@ class PGPlanAnalyzer:
         for sub_plan in plan_node.get("Plans", []):
             nodes.extend(self.find_problematic_nodes(sub_plan))
         return nodes
+
+    @staticmethod
+    def assign_line_numbers(root_plan: dict[str, Any], raw_explain_text: str) -> None:
+        """
+        JSON 플랜 트리의 각 노드에 대응하는 raw_explain_text 상의 라인 번호(1-indexed)를
+        '_line_number' 키로 재귀 부여합니다.
+        """
+        if not raw_explain_text or not root_plan:
+            return
+
+        lines = raw_explain_text.splitlines()
+        if not lines:
+            return
+
+        def find_matching_line(node: dict[str, Any], start_idx: int) -> int:
+            node_type = node.get("Node Type", "")
+            rel_name = node.get("Relation Name", "")
+            alias = node.get("Alias", "")
+            idx_name = node.get("Index Name", "")
+            subplan_name = node.get("Subplan Name", "")
+
+            first_type_match = -1
+
+            for i in range(start_idx, len(lines)):
+                line = lines[i]
+                if node_type and node_type in line:
+                    match_rel = bool(rel_name and (rel_name in line or (alias and alias in line)))
+                    match_idx = bool(idx_name and idx_name in line)
+                    match_sub = bool(subplan_name and subplan_name in line)
+
+                    if match_rel or match_idx or match_sub:
+                        return i
+
+                    if first_type_match == -1:
+                        first_type_match = i
+
+            if first_type_match != -1:
+                return first_type_match
+
+            return min(start_idx, len(lines) - 1)
+
+        def traverse(node: dict[str, Any], search_idx: int) -> int:
+            found_idx = find_matching_line(node, search_idx)
+            node["_line_number"] = found_idx + 1
+
+            curr_search = found_idx + 1
+            for sub_plan in node.get("Plans", []):
+                curr_search = traverse(sub_plan, curr_search)
+            return max(curr_search, found_idx + 1)
+
+        traverse(root_plan, 0)
+
+    @staticmethod
+    def format_explain_with_line_numbers(raw_explain_text: str) -> str:
+        """실행계획 텍스트 각 라인의 왼쪽에 Line 번호를 추가합니다."""
+        if not raw_explain_text:
+            return ""
+        lines = raw_explain_text.splitlines()
+        max_digits = max(2, len(str(len(lines))))
+        formatted_lines = []
+        for idx, line in enumerate(lines, 1):
+            line_num_str = f"Line {idx:>{max_digits}}"
+            formatted_lines.append(f"{line_num_str} | {line}")
+        return "\n".join(formatted_lines)
+

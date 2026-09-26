@@ -1,7 +1,6 @@
-
 from models.recommendation import RecommendationModel
-from rules.base_rule import BaseRule, RuleContext
-
+from rules.base_rule import RuleContext
+from rules.base_rule import BaseRule
 
 class HashJoinBatchInflationRule(BaseRule):
     RULE_ID = "RULE_JOIN_009"
@@ -20,9 +19,10 @@ class HashJoinBatchInflationRule(BaseRule):
         recommendations = []
         node_type = node.get("Node Type", "Hash Join")
 
-        # Original Hash Batches와 Original Hash Buckets 지표 활용
-        orig_batches = node.get("Original Hash Batches", 1)
-        actual_batches = node.get("Hash Batches", 1)
+        # PostgreSQL EXPLAIN JSON에서 Original/Actual Hash Batches는 하위 Hash 노드에 위치함
+        hash_node = next((p for p in node.get("Plans", []) if p.get("Node Type") == "Hash"), node)
+        orig_batches = hash_node.get("Original Hash Batches", node.get("Original Hash Batches", 1))
+        actual_batches = hash_node.get("Hash Batches", node.get("Hash Batches", 1))
 
         if orig_batches == 1 and actual_batches >= 8:
             recommendations.append(

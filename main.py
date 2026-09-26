@@ -520,6 +520,7 @@ class App(ctk.CTk):
                         return
 
                     root_plan = explain_data[0].get("Plan", {})
+                    plan_analyzer.assign_line_numbers(root_plan, raw_explain_text)
                     target_nodes = plan_analyzer.find_problematic_nodes(root_plan)
 
                     clean_query = plan_analyzer.clean_query_comments(query)
@@ -533,6 +534,8 @@ class App(ctk.CTk):
                     all_recs: list[RecommendationModel] = []
                     for node in target_nodes:
                         all_recs.extend(rule_engine.analyze_node(context, node))
+
+                    all_recs = RuleEngine.deduplicate_recommendations(all_recs)
 
                     all_recs.sort(
                         key=lambda r: (
@@ -630,10 +633,12 @@ class App(ctk.CTk):
         self.txt_result.delete("1.0", "end")
         self.txt_result.configure(text_color=self.color_text_normal)
 
+        formatted_explain = PGPlanAnalyzer.format_explain_with_line_numbers(raw_explain)
+
         self.txt_result.insert("end", "========================================================\n")
         self.txt_result.insert("end", "🔍 [데이터베이스 실제 EXPLAIN 수립 결과]\n")
         self.txt_result.insert("end", "========================================================\n")
-        self.txt_result.insert("end", f"{raw_explain}\n\n")
+        self.txt_result.insert("end", f"{formatted_explain}\n\n")
 
         self.txt_result.insert("end", "========================================================\n")
         self.txt_result.insert("end", "💡 [지식 기반 자동 튜닝 권장 리포트]\n")
@@ -652,7 +657,20 @@ class App(ctk.CTk):
                     "end",
                     f"{severity_symbol} [{rec.severity}] 튜닝 가이드 #{idx}{rule_str}: {rec.title}\n",
                 )
-                self.txt_result.insert("end", f"  • 대상 노드  : {rec.plan_node or 'Unknown'}\n")
+
+                lines_info = ""
+                if getattr(rec, "plan_lines", None) and len(rec.plan_lines) > 0:
+                    if len(rec.plan_lines) == 1:
+                        lines_info = f"Line {rec.plan_lines[0]}"
+                    else:
+                        lines_info = f"Line {', '.join(map(str, rec.plan_lines))}"
+                elif getattr(rec, "plan_line", None) is not None:
+                    lines_info = f"Line {rec.plan_line}"
+
+                node_str = rec.plan_node or 'Unknown'
+                mapping_str = f"{lines_info} [{node_str}]" if lines_info else node_str
+
+                self.txt_result.insert("end", f"  • 실행계획 위치 : {mapping_str}\n")
                 self.txt_result.insert("end", f"  • 현상 및 원인: {rec.reason}\n")
                 self.txt_result.insert("end", f"  • 조치 가이드: {rec.recommendation}\n")
                 if rec.recommended_sql:

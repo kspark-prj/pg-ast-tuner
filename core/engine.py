@@ -1,5 +1,6 @@
 import importlib
 import pkgutil
+import re
 import sys
 from typing import Any
 
@@ -68,6 +69,7 @@ class RuleEngine:
         node_recommendations = []
         node_type = node.get("Node Type")
 
+        node_line = node.get("_line_number")
         for rule in self.rules:
             # target node type 매칭 검증
             if "*" in rule.TARGET_NODE_TYPES or (node_type and node_type in rule.TARGET_NODE_TYPES):
@@ -75,16 +77,23 @@ class RuleEngine:
                     if rule.match(context, node):
                         res = rule.analyze(context, node)
 
-                        # 리턴된 RecommendationModel에 rule_id가 누락되어 있다면 자동 할당
+                        # 리턴된 RecommendationModel에 rule_id 및 line_number 매핑
+                        added_recs = []
                         if isinstance(res, list):
-                            for r in res:
-                                if hasattr(r, "rule_id") and not r.rule_id:
-                                    r.rule_id = rule.RULE_ID
-                            node_recommendations.extend(res)
+                            added_recs = res
                         elif res is not None:
-                            if hasattr(res, "rule_id") and not res.rule_id:
-                                res.rule_id = rule.RULE_ID
-                            node_recommendations.append(res)
+                            added_recs = [res]
+
+                        for r in added_recs:
+                            if hasattr(r, "rule_id") and not r.rule_id:
+                                r.rule_id = rule.RULE_ID
+                            if node_line:
+                                if hasattr(r, "plan_line") and r.plan_line is None:
+                                    r.plan_line = node_line
+                                if hasattr(r, "plan_lines") and node_line not in r.plan_lines:
+                                    r.plan_lines.append(node_line)
+
+                        node_recommendations.extend(added_recs)
 
                 except Exception as e:
                     print(
@@ -93,3 +102,94 @@ class RuleEngine:
                     )
 
         return node_recommendations
+
+    @staticmethod
+    def deduplicate_recommendations(recs: list[Any]) -> list[Any]:
+        """
+        실행 계획의 상위/하위 노드 탐색 및 반복 풀 스캔 탐색으로 발생할 수 있는 동일한 룰 ID, 사유, 가이드 항목을 병합하고
+        중복된 추천 메시지 및 SQL 구문을 통합 정제합니다.
+        """
+        seen = set()
+        first_pass = []
+        for r in recs:
+            rule_id = getattr(r, "rule_id", "") or ""
+            title = getattr(r, "title", "") or ""
+            recommendation = getattr(r, "recommendation", "") or ""
+            recommended_sql = getattr(r, "recommended_sql", "") or ""
+
+            key = (rule_id, title, recommendation, recommended_sql)
+            if key not in seen:
+                seen.add(key)
+                first_pass.append(r)
+            else:
+                # 이미 동일한 key가 존재하면 plan_lines만 기존 객체에 병합
+                for existing_item in first_pass:
+                    e_key = (
+                        getattr(existing_item, "rule_id", "") or "",
+                        getattr(existing_item, "title", "") or "",
+                        getattr(existing_item, "recommendation", "") or "",
+                        getattr(existing_item, "recommended_sql", "") or "",
+                    )
+                    if e_key == key:
+                        if hasattr(r, "plan_lines") and hasattr(existing_item, "plan_lines"):
+                            for line in r.plan_lines:
+                                if line not in existing_item.plan_lines:
+                                    existing_item.plan_lines.append(line)
+                            existing_item.plan_lines.sort()
+                            if existing_item.plan_lines:
+                                existing_item.plan_line = existing_item.plan_lines[0]
+                        break
+
+        grouped = {}
+        result = []
+        for r in first_pass:
+            rule_id = getattr(r, "rule_id", "") or ""
+            severity = getattr(r, "severity", "") or ""
+            reason = getattr(r, "reason", "") or ""
+            recommendation = getattr(r, "recommendation", "") or ""
+
+            group_key = (rule_id, severity, reason, recommendation)
+            if group_key not in grouped:
+                grouped[group_key] = r
+                result.append(r)
+            else:
+                existing = grouped[group_key]
+                if hasattr(r, "plan_lines") and hasattr(existing, "plan_lines"):
+                    for line in r.plan_lines:
+                        if line not in existing.plan_lines:
+                            existing.plan_lines.append(line)
+                    existing.plan_lines.sort()
+                    if existing.plan_lines:
+                        existing.plan_line = existing.plan_lines[0]
+                elif getattr(r, "plan_line", None) is not None:
+                    if getattr(existing, "plan_line", None) is None:
+                        existing.plan_line = r.plan_line
+
+                m_exist = re.search(r"^'([^']+)'\s+(.*)", existing.title)
+                m_new = re.search(r"^'([^']+)'\s+(.*)", r.title)
+
+                if m_exist and m_new:
+                    tables = [t.strip() for t in m_exist.group(1).split(",")]
+                    new_table = m_new.group(1).strip()
+                    if new_table not in tables:
+                        tables.append(new_table)
+                    table_str = ", ".join([f"'{t}'" for t in tables])
+                    existing.title = f"{table_str} {m_exist.group(2)}"
+
+                if r.recommended_sql and existing.recommended_sql:
+                    existing_sqls = [
+                        s.strip()
+                        for s in existing.recommended_sql.splitlines()
+                        if s.strip()
+                    ]
+                    new_sqls = [
+                        s.strip()
+                        for s in r.recommended_sql.splitlines()
+                        if s.strip()
+                    ]
+                    for s in new_sqls:
+                        if s not in existing_sqls:
+                            existing_sqls.append(s)
+                    existing.recommended_sql = "\n".join(existing_sqls)
+
+        return result

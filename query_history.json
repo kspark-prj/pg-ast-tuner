@@ -1,15 +1,83 @@
 [
     {
-        "timestamp": "2026-08-16 13:01:42",
+        "timestamp": "2026-09-26 22:20:19",
+        "query": "SELECT l.lineitem_id, u.username\nFROM test_lineitems l\nJOIN test_orders o ON l.order_id = o.order_id\nJOIN test_users u ON o.user_id = u.user_id\nWHERE l.price > 95.00;"
+    },
+    {
+        "timestamp": "2026-09-26 22:19:59",
+        "query": "SELECT o.order_id, u.username\nFROM test_orders o\nJOIN test_users u ON o.order_amount = u.user_id\nWHERE o.order_id = 100;"
+    },
+    {
+        "timestamp": "2026-09-26 22:19:28",
+        "query": "SELECT o.order_id, o.order_amount, l.item_name\nFROM test_orders o\nJOIN test_lineitems l ON o.order_id = l.order_id;"
+    },
+    {
+        "timestamp": "2026-09-26 22:18:10",
+        "query": "SELECT * FROM test_orders WHERE UPPER(order_status) = 'ACTIVE';"
+    },
+    {
+        "timestamp": "2026-09-26 21:54:56",
+        "query": "SELECT *\nFROM test_orders\nWHERE user_id BETWEEN 1 AND 800;"
+    },
+    {
+        "timestamp": "2026-09-26 21:54:41",
+        "query": "SELECT *\nFROM test_orders\nWHERE order_status = 'PENDING'\n  AND order_amount > 490.00;"
+    },
+    {
+        "timestamp": "2026-09-26 21:54:36",
+        "query": "SELECT order_status, order_amount\nFROM test_orders\nWHERE order_status = 'COMPLETED';"
+    },
+    {
+        "timestamp": "2026-09-26 21:53:56",
+        "query": "SELECT *\nFROM test_orders\nWHERE order_status = 'COMPLETED'\n  AND padding LIKE 'A%';"
+    },
+    {
+        "timestamp": "2026-09-26 21:45:08",
+        "query": "SELECT *\nFROM test_orders\nWHERE order_date >= NOW() - INTERVAL '1 day';"
+    },
+    {
+        "timestamp": "2026-09-26 21:44:27",
+        "query": "SELECT o.order_id, u.username\nFROM test_orders o\nJOIN test_users u ON UPPER(o.order_status) = UPPER(u.user_category);"
+    },
+    {
+        "timestamp": "2026-09-26 21:43:13",
+        "query": "SELECT o.order_id, u.username\nFROM test_users u\nJOIN test_orders o ON u.user_id = o.user_id;"
+    },
+    {
+        "timestamp": "2026-09-26 21:39:45",
+        "query": "SELECT o.order_id, u.user_id\nFROM test_orders o\nJOIN test_users u ON o.order_amount = u.user_id;"
+    },
+    {
+        "timestamp": "2026-09-26 21:34:47",
+        "query": "SELECT o.order_id, u.username\n        FROM test_orders o\n        JOIN test_users u ON o.order_amount = u.user_id\n        WHERE o.order_id = 100;"
+    },
+    {
+        "timestamp": "2026-09-26 21:30:28",
+        "query": "SELECT o.order_id, u.username\nFROM test_orders o\nJOIN test_users u ON o.user_id = u.user_id\nWHERE o.order_amount > 490.00;"
+    },
+    {
+        "timestamp": "2026-09-26 21:23:58",
+        "query": "SELECT o.order_id, o.order_amount, u.username\nFROM test_orders o\nJOIN test_users u ON o.user_id = u.user_id;"
+    },
+    {
+        "timestamp": "2026-09-26 21:14:20",
+        "query": "SET enable_hashjoin = off;\nSET enable_nestloop = off;\n\nEXPLAIN (ANALYZE, COSTS, BUFFERS, FORMAT JSON)\nSELECT o.order_id, u.user_id\nFROM test_orders o\nJOIN test_users u ON o.order_amount = u.user_id;\n\nRESET enable_hashjoin;\nRESET enable_mergejoin;"
+    },
+    {
+        "timestamp": "2026-09-26 21:13:20",
+        "query": "SELECT o.order_id, u.username\nFROM test_orders o\nJOIN test_users u ON o.user_id = u.user_id\nWHERE o.order_amount > 100;"
+    },
+    {
+        "timestamp": "2026-09-26 21:05:18",
+        "query": "SELECT board_id, title, writer_id, created_at\nFROM public.board\nWHERE category_id = 1\n  AND is_deleted = false\n  AND created_at >= '2026-08-01 00:00:00'\n  AND created_at < '2026-08-05 00:00:00'\nORDER BY board_id DESC\nLIMIT 20;"
+    },
+    {
+        "timestamp": "2026-09-26 21:05:10",
         "query": "-- 3-2. 전체 사용자 대상 1시간 전 푸시 알림 발송 대상 추출 쿼리\n-- (오늘 대상 요일 + 미완료 루틴 + 목표 시각 55~65분 전 배치 스케줄러용)\nSELECT \n    u.user_id,\n    u.username,\n    r.routine_id,\n    r.title AS routine_title,\n    s.target_time AS 알림_목표_시간,\n    TO_CHAR(s.target_time, 'HH24:MI') AS formatted_target_time\nFROM routine_schedules s\nJOIN routines r ON r.routine_id = s.routine_id\nJOIN users u ON u.user_id = r.user_id\nLEFT JOIN routine_logs rl \n       ON rl.routine_id = r.routine_id \n      AND rl.log_date = CURRENT_DATE\nWHERE s.day_of_week = EXTRACT(DOW FROM CURRENT_DATE)\n  AND rl.log_id IS NULL -- 미완료된 루틴만 발송\n  AND s.target_time BETWEEN (CURRENT_TIME + INTERVAL '55 minutes')::TIME \n                        AND (CURRENT_TIME + INTERVAL '65 minutes')::TIME;"
     },
     {
         "timestamp": "2026-08-16 13:00:08",
         "query": "SELECT \n    r.routine_id,\n    r.title AS routine_title,\n    s.target_time AS scheduled_time,\n    r.current_streak AS 현재_스트릭,\n    (rl.log_id IS NOT NULL) AS is_completed,\n    rl.completed_at AS 완료_시각\nFROM routines r\nJOIN routine_schedules s ON s.routine_id = r.routine_id\nLEFT JOIN routine_logs rl \n       ON rl.routine_id = r.routine_id \n      AND rl.log_date = CURRENT_DATE\nWHERE r.user_id = 1\n  AND s.day_of_week = EXTRACT(DOW FROM CURRENT_DATE)\nORDER BY s.target_time ASC;"
-    },
-    {
-        "timestamp": "2026-08-16 12:59:52",
-        "query": "SELECT * FROM test_orders WHERE UPPER(order_status) = 'ACTIVE';"
     },
     {
         "timestamp": "2026-08-16 12:48:50",
@@ -20,15 +88,7 @@
         "query": "SELECT * FROM test_orders WHERE UPPER(status) = 'ACTIVE';"
     },
     {
-        "timestamp": "2026-08-09 18:02:44",
-        "query": "SELECT o.order_id, u.username\nFROM test_orders o\nJOIN test_users u ON UPPER(o.order_status) = UPPER(u.user_category);"
-    },
-    {
         "timestamp": "2026-08-07 12:26:09",
         "query": "SELECT board_id, title, writer_id, created_at\nFROM public.board\nWHERE category_id = 1\n  AND is_deleted = false\n  AND created_at >= '2026-08-01 00:00:00'\n  AND created_at < '2026-08-05 00:00:00'\nORDER BY board_id DESC"
-    },
-    {
-        "timestamp": "2026-08-07 12:25:57",
-        "query": "SELECT board_id, title, writer_id, created_at\nFROM public.board\nWHERE category_id = 1\n  AND is_deleted = false\n  AND created_at >= '2026-08-01 00:00:00'\n  AND created_at < '2026-08-05 00:00:00'\nORDER BY board_id DESC\nLIMIT 20;"
     }
 ]

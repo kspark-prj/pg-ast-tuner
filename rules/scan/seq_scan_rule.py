@@ -225,7 +225,7 @@ class SeqScanRule(BaseRule):
                                         exp.NEQ,
                                     ),
                                 ):
-                                    if isinstance(parent, (exp.Func, exp.Anonymous, exp.Cast)):
+                                    if isinstance(parent, (exp.Func, exp.Anonymous, exp.Cast)) and not isinstance(parent, (exp.And, exp.Or, exp.Not, exp.Like, exp.In, exp.Between, exp.Connector)):
                                         outermost_wrapper = parent
                                     parent = parent.parent
 

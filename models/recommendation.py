@@ -20,5 +20,11 @@ class RecommendationModel(BaseModel):
     plan_node: Optional[str] = Field(
         default=None, description="영향을 받는 실행 계획 노드 타입 (e.g. Seq Scan)"
     )
+    plan_line: Optional[int] = Field(
+        default=None, description="매핑된 실행 계획 텍스트의 라인 번호 (1-indexed)"
+    )
+    plan_lines: list[int] = Field(
+        default_factory=list, description="매핑된 실행 계획 텍스트의 라인 번호 목록"
+    )
     estimated_gain: Optional[str] = Field(default=None, description="예상 성능 향상 효과")
     false_positive_risk: Optional[str] = Field(default=None, description="오진 위험도 또는 제약 사항")
