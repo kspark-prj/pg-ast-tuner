@@ -8,13 +8,37 @@
 
 ## 📌 주요 핵심 기능 (Key Features)
 
-- **실제 실행계획(Raw Plan) 최상단 탑재**: DB 옵티마이저가 수립한 표준 텍스트 기반 트리 구조의 실행 계획을 리포트 최상단에 직관적으로 시각화하여 튜닝 신뢰성을 높입니다.
-- **SQL AST 분석 기반 지식 매핑**: `sqlglot` 파서를 통해 SQL의 논리적 구조를 완전히 분해(AST)하여, 테이블 별칭(Alias) 및 조건절에 사용된 컬럼 정보를 정확히 타겟팅합니다.
-- **시스템 카탈로그 교차 검증**: 단순히 쿼리문만 파싱하는 것에 그치지 않고, `pg_class`, `pg_index` 등 데이터베이스 시스템 카탈로그를 실시간 조회하여 인덱스 구성 상태 및 실제 데이터 테이블 크기(Row Count)를 고려한 정밀 휴리스틱 진단을 수행합니다.
-- **규칙 자동 검색(Auto-Discovery) 엔진**: 새 규칙 추가 시 `rules/` 하위에 파일만 생성하면 엔진 코드나 GUI 코드 수정 없이 동적으로 탐색되어 즉시 반영됩니다.
-- **안전한 온디맨드(On-Demand) 트랜잭션 및 이중 락다운**: 분석 버튼을 누르는 즉시 연결을 맺고 완료 즉시 차단하며, `Explain (Analyze)` 등으로 인한 데이터 변경 가능성을 방지하기 위해 강제 롤백(Rollback) 세션 구조를 채택했습니다. 또한, 기존의 정적 문자열 매칭 한계를 극복하고 **SQL AST 분석을 활용하여 CTE(WITH 절) 내의 DML/DDL 우회 시도까지 이중으로 완전 차단**합니다.
-- **정밀화된 오진(False Positive) 방지 필터링**: 단순히 특정 노드 유형이나 단일 속성의 유무만 매칭하는 방식에서 벗어나, 중첩 루프 조인의 매개변수화(Parameterized) 여부(외부 릴레이션/별칭의 조건절 하향식 참조 확인), 대량 스캔 필터링 시 누적 유효 행(Live Rows) 대비 밀도 연산, 그리고 시스템 메타데이터 미확보 시의 안전한 예외 차단 등을 종합 적용하여 실무 환경에서의 오탐과 비정상 분석 크래시를 원천적으로 방지합니다.
-- **스마트 주석 처리(Comment Stripper)**: 한 줄 주석(`--`) 및 인라인 블록 주석(`/* ... */`)이 섞여 있는 대용량 실무 쿼리도 에러 없이 완벽하게 정제하여 처리합니다.
+- **실제 실행 순서(Post-Order Traversal) 기반 SEQ 라인 번호 현행화**: 
+  - DB 옵티마이저의 단순 상단-하단 텍스트 줄 번호가 아닌, 쿼리 엔진의 **후위 순회(Bottom-Up Execution Order)**에 따른 실제 연산 순서(`SEQ 1`, `SEQ 2`, `SEQ 3`...)로 라인 번호를 부여합니다.
+  - 실행 계획 텍스트와 하단 튜닝 가이드 리포트의 `실행계획 위치: SEQ N [노드명]` 항목이 100% 동기화되어 직관적이고 정확한 위치 확인이 가능합니다.
+
+- **실측 분석(`EXPLAIN (ANALYZE, BUFFERS)`) 통합 출력**:
+  - 리포트 상단 영역에서 단순 추정치뿐만 아니라 실제 수행 시간(`actual time`), 처리 행 수(`actual rows`), 반복 횟수(`loops`), 버퍼 히트/디스크 읽기(`Buffers: shared hit/read`) 실측치를 원스톱으로 직관 확인할 수 있습니다.
+
+- **📊 단계별 실행 과정 분석 리포트 (실행 순서 기준) 신설**:
+  - `[데이터베이스 실제 EXPLAIN 수립 결과]`와 `[💡 지식 기반 자동 튜닝 권장 리포트]` 사이에 실행 순서(`SEQ 1` ~ `SEQ N`)별 한글 연산 해설 섹션이 추가되었습니다.
+  - 각 단계별 대상 테이블/인덱스, 수행 연산 내용, 실측 소요시간/출력행/반복횟수, 메모리/디스크 I/O 사용 실적을 쿼리 실행 흐름대로 쉽게 풀어서 설명합니다.
+
+- **🖱️ 마우스 드래그 분할 스플리터 UI (PanedWindow)**:
+  - 좌측 **SQL 입력창**과 우측 **결과 리포트 창** 사이의 중앙 구분선(Sash Width: 6px, 커서 `↔`)을 마우스로 자유롭게 드래그하여 화면 분할 너비를 실시간으로 조절할 수 있습니다.
+
+- **SQL AST 분석 기반 지식 매핑**: 
+  - `sqlglot` 파서를 통해 SQL의 논리적 구조를 완전히 분해(AST)하여, 테이블 별칭(Alias) 및 조건절에 사용된 컬럼 정보를 정확히 타겟팅합니다.
+
+- **시스템 카탈로그 교차 검증**: 
+  - 단순히 쿼리문만 파싱하는 것에 그치지 않고, `pg_class`, `pg_index` 등 데이터베이스 시스템 카탈로그를 실시간 조회하여 인덱스 구성 상태 및 실제 데이터 테이블 크기(Row Count)를 고려한 정밀 휴리스틱 진단을 수행합니다.
+
+- **규칙 자동 검색(Auto-Discovery) 엔진**: 
+  - 새 규칙 추가 시 `rules/` 하위에 파일만 생성하면 엔진 코드나 GUI 코드 수정 없이 동적으로 탐색되어 즉시 반영됩니다.
+
+- **안전한 온디맨드(On-Demand) 트랜잭션 및 이중 락다운**: 
+  - 분석 버튼을 누르는 즉시 연결을 맺고 완료 즉시 차단하며, `Explain (Analyze)` 등으로 인한 데이터 변경 가능성을 방지하기 위해 강제 롤백(Rollback) 세션 구조를 채택했습니다. 또한, **SQL AST 분석을 활용하여 CTE(WITH 절) 내의 DML/DDL 우회 시도까지 이중으로 완전 차단**합니다.
+
+- **정밀화된 오진(False Positive) 방지 필터링**: 
+  - 중첩 루프 조인의 매개변수화(Parameterized) 여부 확인, 대량 스캔 필터링 시 누적 유효 행(Live Rows) 대비 밀도 연산, 시스템 메타데이터 미확보 시의 예외 차단 등을 종합 적용하여 오탐과 크래시를 방지합니다.
+
+- **스마트 주석 처리(Comment Stripper)**: 
+  - 한 줄 주석(`--`) 및 인라인 블록 주석(`/* ... */`)이 섞여 있는 대용량 실무 쿼리도 에러 없이 완벽하게 정제하여 처리합니다.
 
 ---
 
@@ -24,13 +48,13 @@
 
 ```
 project/
-├── main.py                     # CustomTkinter GUI 진입점 및 뷰 컨트롤러
+├── main.py                     # CustomTkinter GUI 진입점, PanedWindow 드래그 스플릿 뷰 컨트롤러
 ├── config.py                   # DB 접속 및 환경 설정 관리자 (ConfigManager)
 ├── core/
 │   ├── __init__.py
 │   ├── engine.py               # RuleEngine 및 자동 규칙 탐색(Auto-Discovery) 코어
 │   ├── catalog.py              # 시스템 카탈로그 조회 및 메타데이터 리더 (PGMetadataProvider)
-│   └── parser.py               # SQL AST 파서 및 Explain 분석기 (PGPlanAnalyzer)
+│   └── parser.py               # SQL AST 파서, Post-Order SEQ 부여 및 실행 과정 리포트 생성기 (PGPlanAnalyzer)
 ├── models/
 │   ├── __init__.py
 │   └── recommendation.py       # Pydantic 기반 표준 권장 리포트 데이터 모델
@@ -39,9 +63,11 @@ project/
 │   ├── base_rule.py            # 모든 규칙이 상속받는 Abstract Base Rule & RuleContext
 │   ├── scan/                   # SeqScanRule, IndexScanRule 등 스캔 관련 룰
 │   ├── join/                   # HashJoinRule, NestedLoopRule 등 조인 관련 룰
-│   └── statistics/             # TempFileRule, ParallelWorkersRule, SortRule 및 메모리/구조적 진단 룰
+│   ├── statistics/             # TempFileRule, ParallelWorkersRule, SortRule 등 통계 룰
+│   ├── memory/                 # ExcessiveWorkMemRule, MaterializeSpillRule 등 메모리 룰
+│   └── structural/             # LockRowsOverheadRule, CTEInliningFailureRule 등 구조적 룰
 └── tests/
-    └── test_rules.py           # Pytest 기반 단위 및 탐색 통합 테스트
+    └── test_rules.py           # Pytest 기반 단위, 실행 순서, 리포트 생성 및 탐색 통합 테스트
 ```
 
 ---
@@ -62,6 +88,7 @@ project/
 | `RULE_SCAN_006` | `SubqueryScanRepetitionRule`  | Subquery Scan               | 상관 서브쿼리나 미튜닝 스칼라 서브쿼리가 상위 루프만큼 반복 실행(N+1 스캔 병목)되는지 진단                                        |
 | `RULE_SCAN_007` | `IndexFilterInefficiencyRule` | Index Scan, Index Only Scan | Index Cond이 아닌 Index Filter로 과도한 행이 스캔되는 비효율 진단 (선행 컬럼 Prefix Match 평가 포함)                              |
 | `RULE_SCAN_008` | `StaleVisibilityMapRule`      | Seq Scan, Bitmap Heap Scan  | 데드 튜플(Dead Tuples) 및 테이블 블로트(Bloat)로 인한 불필요한 I/O 대량 발생 진단 (선택도 필터링을 반영한 Live 행 밀도 연산 적용) |
+| `RULE_SCAN_009` | `BitmapMultiIndexInefficiencyRule` | BitmapAnd, BitmapOr | 복수 단일 컬럼 인덱스의 비트맵 결합 연산 오버헤드 진단 및 복합 인덱스 신설 권장                                                   |
 
 ### 2. 조인 진단 규칙 (JOIN Category)
 
@@ -76,6 +103,7 @@ project/
 | `RULE_JOIN_007` | `CrossJoinRule`                    | Nested Loop, Hash Join | 조인 조건이 누락되거나 잘못 설정되어 발생하는 카티시안 곱(Cartesian Product, Cross Join) 진단 (매개변수화된 Parameterized NL 조인 필터링 적용) |
 | `RULE_JOIN_008` | `ParallelJoinWorkerLossRule`       | Gather, Gather Merge   | 병렬 조인 수행 시 계획된 워커 수보다 실제 실행 시 할당된 워커 수(Workers Launched)가 부족한 현상 진단                                          |
 | `RULE_JOIN_009` | `HashJoinBatchInflationRule`       | Hash Join              | 빌드 데이터 예측 실패로 인해 실행 중 해시 배치 수가 최초 예상보다 동적으로 폭증(8배 이상)했는지 진단                                           |
+| `RULE_JOIN_010` | `MemoizeCacheInefficiencyRule`     | Memoize                | Nested Loop 루프 수행 중 Memoize 캐시 미스 및 캐시 오버플로우로 인한 재평가 오버헤드 진단                                                      |
 
 ### 3. 통계 및 리소스 진단 규칙 (STATISTICS Category)
 
@@ -88,6 +116,7 @@ project/
 | `RULE_STAT_005` | `ParallelWorkerSkewRule`   | Gather, Gather Merge | 병렬 워커 간 데이터 처리량 차이가 5배 이상으로 한쪽 워커에 편중되어 병목이 발생하는지 감지                                       |
 | `RULE_STAT_006` | `JITOverheadRule`          | 전체 (\*)            | JIT(Just-In-Time) 컴파일 작업에 총 100ms 이상의 과도한 시간이 소요되는 컴파일 오버헤드 진단                                      |
 | `RULE_STAT_007` | `IncrementalSortSpillRule` | Incremental Sort     | 증분 정렬 수행 중 부분 정렬 메모리 한계를 초과하여 디스크 스필(Sort Space Used)이 일어나는지 진단                                |
+| `RULE_STAT_008` | `WindowAggSortOverheadRule`| WindowAgg            | WindowAgg 절 처리를 위해 하위에서 명시적 메모리/디스크 정렬이 강제되는 비효율 진단                                               |
 
 ### 4. 메모리 진단 규칙 (MEMORY Category)
 
@@ -95,6 +124,7 @@ project/
 | :------------- | :------------------------- | :-------------------- | :------------------------------------------------------------------------------ |
 | `RULE_MEM_001` | `ExcessiveWorkMemRule`     | Sort, Hash, Aggregate | 단일 연산 노드에서 지나치게 높은 `work_mem`을 할당하여 사용 중인지 진단         |
 | `RULE_MEM_002` | `BufferCacheMissRatioRule` | 전체 (\*)             | Shared Buffers 메모리 히트율이 낮아 실제 디스크 Read I/O 병목이 발생하는지 진단 |
+| `RULE_MEM_003` | `MaterializeSpillRule`     | Materialize           | Materialize 노드의 캐시 크기가 메모리를 초과하여 디스크로 스필되는 오버헤드 진단|
 
 ### 5. 구조적 진단 규칙 (STRUCTURAL Category)
 
@@ -104,6 +134,7 @@ project/
 | `RULE_STR_002` | `ForeignTableScanRule`          | Foreign Scan                        | FDW(Foreign Data Wrapper) 원격 테이블 스캔 시 푸시다운(Pushdown) 실패로 대량 데이터가 전송되는지 진단 |
 | `RULE_STR_003` | `ConstraintTriggerOverheadRule` | ModifyTable, Insert, Update, Delete | DML(INSERT/UPDATE/DELETE) 수행 중 FK 검증 또는 트리거 실행 지연 요소 진단                             |
 | `RULE_STR_004` | `HotUpdateFailureRule`          | Update                              | UPDATE 시 HOT(Heap-Only Tuple) 최적화가 적용되지 못해 인덱스 블록 수정 오버헤드가 발생하는지 진단     |
+| `RULE_STR_005` | `LockRowsOverheadRule`          | LockRows                            | SELECT FOR UPDATE / FOR SHARE 행 잠금 탐색 시 풀 스캔으로 인한 락 블로킹 및 병목 위험 진단            |
 
 ---
 
@@ -141,62 +172,16 @@ project/
 ```
 
 #### 1단계. SQL AST 문법 트리 분석 (`sqlglot` 엔진)
-
 - **목적**: 쿼리에서 "필터링(`WHERE`)이나 정렬(`ORDER BY`)에 실제로 사용된 테이블과 컬럼"이 무엇인지 식별합니다.
-- **이유**: 단순 정규식이나 문자열 검색은 테이블 별칭(Alias, 예: `orders o` -> `o.user_id`)이나 복잡한 서브쿼리 내의 컬럼을 제대로 짚어내지 못합니다. AST 파서는 이를 트리 구조로 완벽히 쪼개어 `orders` 테이블의 `user_id` 컬럼이 조건절에 쓰였음을 명확히 알아냅니다.
+- **이유**: 단순 정규식이나 문자열 검색은 테이블 별칭(Alias)이나 복잡한 서브쿼리 내의 컬럼을 제대로 짚어내지 못합니다. AST 파서는 이를 트리 구조로 완벽히 쪼개어 조건절 컬럼을 명확히 알아냅니다.
 
 #### 2단계. PostgreSQL 시스템 카탈로그 조회 (`PGMetadataProvider`)
-
 - **목적**: 해당 테이블에 **"실제 어떤 인덱스들이 만들어져 있는지"**, 그리고 **"테이블 크기(Row Count)가 얼마나 큰지"** 확인합니다.
-- **이유**: 소량의 데이터(예: 10건)가 들어있는 테이블은 인덱스가 있어도 옵티마이저가 풀 스캔(`Seq Scan`)을 해버립니다. 따라서 카탈로그를 조회해 실제 테이블 규모와 인덱스 컬럼 목록(`user_id`가 인덱스 첫 열로 지정되어 있는지 등)을 파악합니다.
+- **이유**: 소량의 데이터가 들어있는 테이블은 인덱스가 있어도 옵티마이저가 풀 스캔(`Seq Scan`)을 하므로, 카탈로그를 조회해 실제 규모와 인덱스 컬럼 구조를 파악합니다.
 
-#### 3단계. EXPLAIN 실행 계획 추적 (`PGPlanAnalyzer`)
-
-- **목적**: PostgreSQL 옵티마이저가 실제로 수립한 "물리적 실행 계획"을 받아옵니다.
-- **이유**: 아무리 쿼리를 잘 짜고 인덱스가 있어도, 옵티마이저가 엉뚱한 길을 선택할 수 있기 때문입니다. 실행 계획상에 `Seq Scan` 노드가 찍혔는지를 최종 확인합니다.
-
----
-
-## 🛠️ 자동 규칙 추가 및 탐색 방식 (Adding New Rules)
-
-본 프로젝트는 OCP(Open-Closed Principle)를 지향하여 설계되었습니다. 새로운 분석 룰(Rule)을 추가할 때 **엔진 코드(`engine.py`)나 UI 코드(`main.py`)를 전혀 수정할 필요가 없습니다.**
-
-### 규칙 추가 단계:
-
-1. `rules/` 하위의 적절한 카테고리 폴더(예: `rules/scan/`)에 새 파이썬 파일 생성
-2. `BaseRule` 클래스를 상속하는 규칙 클래스 정의 및 필수 메타데이터/메서드 구현:
-
-```python
-from rules.base_rule import BaseRule, RuleContext
-from models.recommendation import RecommendationModel
-
-class MyCustomScanRule(BaseRule):
-    RULE_ID = "RULE_SCAN_999"
-    NAME = "MyCustomScanRule"
-    DESCRIPTION = "나만의 커스텀 스캔 검증 규칙"
-    CATEGORY = "SCAN"
-    TARGET_NODE_TYPES = ["Seq Scan"] # 검사 대상 실행 계획 노드 타입 설정 (* 지정 시 전체 대상)
-    SUPPORTED_PG_VERSION = ">=14"
-    DEFAULT_PRIORITY = 3
-    DEFAULT_SEVERITY = "WARNING"
-
-    def match(self, context: RuleContext, node: dict) -> bool:
-        # 이 노드가 분석 대상인지 여부를 판단하는 boolean 반환
-        return "Relation Name" in node
-
-    def analyze(self, context: RuleContext, node: dict) -> RecommendationModel:
-        # Pydantic 모델 형태의 처방전 생성 및 반환
-        return RecommendationModel(
-            title="나만의 튜닝 경고",
-            description="상세 설명 내용...",
-            severity=self.DEFAULT_SEVERITY,
-            priority=self.DEFAULT_PRIORITY,
-            reason="이러한 이유로 성능 저하가 발생했습니다.",
-            recommendation="이렇게 인덱스를 설계하여 해결하십시오.",
-            recommended_sql="CREATE INDEX CONCURRENTLY ...",
-            plan_node=node.get("Node Type")
-        )
-```
+#### 3단계. EXPLAIN ANALYZE 실행 계획 추적 (`PGPlanAnalyzer`)
+- **목적**: PostgreSQL 옵티마이저가 실제로 수립한 물리적 실행 계획과 실제 수행시간/버퍼 실측치를 받아옵니다.
+- **이유**: 실측 지표와 병목 노드(`Seq Scan`, `Disk Sort` 등)를 확인하여 최종 처방을 생성합니다.
 
 ---
 
@@ -204,23 +189,35 @@ class MyCustomScanRule(BaseRule):
 
 ### ⚙️ Prerequisites
 
-실행을 위해 아래 라이브러리 설치가 필요합니다.
+`uv` 패키지 관리자 또는 일반 파이썬 환경에서 실행할 수 있습니다.
 
 ```bash
+# uv를 사용하는 경우 (권장)
+uv sync
+
+# 또는 pip로 직접 설치 시
 pip install customtkinter psycopg sqlglot pydantic pytest
 ```
 
 ### 🏃 GUI 실행 방법
 
 ```bash
+# uv 사용 시
+uv run python main.py
+
+# 또는 일반 파이썬
 python main.py
 ```
 
 ### 🧪 단위 테스트 실행 방법
 
-작성된 규칙들의 기능 및 동적 디스커버리 엔진 작동 상태를 검증합니다.
+작성된 규칙들의 기능, 실행 순서 번호 부여, 리포트 생성기 및 동적 디스커버리 엔진 작동 상태를 검증합니다.
 
 ```bash
+# uv 사용 시
+uv run pytest
+
+# 또는 일반 파이썬
 python -m pytest
 ```
 
@@ -228,25 +225,9 @@ python -m pytest
 
 ## 📦 패키징 가이드 (Executable Build)
 
-Windows 환경 등에서 단일 실행 파일(`.exe`)로 배포하고 싶은 경우, 파이썬 환경 불일치를 방지하고 `psycopg` 등의 의존성을 올바르게 포함하기 위해 아래와 같이 **현재 파이썬 환경의 모듈 방식으로 실행**하는 것을 권장합니다.
-
-### 1. Spec 파일 기반 빌드 (권장)
-
-이미 프로젝트 루트에 구성되어 있는 [`main.spec`](file:///C:/Users/kspar/Tools/github/pg-ast-tuner/main.spec) 파일에는 `psycopg` 모듈 수집(`collect_all`) 및 아이콘 설정 등이 모두 정의되어 있습니다.
+Windows 환경 등에서 단일 실행 파일(`.exe`)로 배포하고 싶은 경우, `main.spec` 파일 기반으로 PyInstaller 빌드를 수행합니다.
 
 ```bash
-# PyInstaller가 설치되어 있지 않다면 먼저 설치
-pip install pyinstaller
-
-# Spec 파일을 사용하여 빌드 실행
+# PyInstaller 설치 후 Spec 파일 기반 빌드
 python -m PyInstaller main.spec
-```
-
-### 2. 커맨드라인 명령어로 직접 빌드할 경우
-
-Spec 파일 없이 명령어로 직접 빌드하는 경우, `psycopg` 모듈의 동적 바인딩 파일들을 수집하도록 `--collect-all` 옵션을 반드시 포함해야 합니다.
-
-```bash
-uv run python -m PyInstaller --clean --noconfirm -w -D --icon=main.ico --add-data "splash.png;." --collect-all psycopg --collect-all sqlglot --collect-all rules --exclude-module pytest --exclude-module matplotlib --exclude-module tkinter.test --exclude-module PyQt5 --exclude-module PyQt6 --exclude-module PySide2 --exclude-module PySide6 --exclude-module scipy --exclude-module pandas --exclude-module IPython --exclude-module notebook --exclude-module tornado main.py
-
 ```

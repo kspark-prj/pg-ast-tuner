@@ -1,11 +1,11 @@
-import json
 import os
 import re
 import socket
 import sys
 import threading
+import tkinter as tk
 from tkinter import messagebox, simpledialog
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import customtkinter as ctk
 
@@ -18,8 +18,6 @@ except ImportError:
 # 핵심 라이브러리
 import psycopg
 from PIL import Image
-from psycopg import sql
-from psycopg.rows import dict_row
 
 # 모듈화 패키지 임포트
 from config import ConfigManager, HistoryManager
@@ -73,7 +71,9 @@ class SplashScreen(ctk.CTkToplevel):
         image_path = get_resource_path("splash.png")
         if os.path.exists(image_path):
             pil_img = Image.open(image_path)
-            self.splash_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(self.width, self.height))
+            self.splash_img = ctk.CTkImage(
+                light_image=pil_img, dark_image=pil_img, size=(self.width, self.height)
+            )
             self.lbl_image = ctk.CTkLabel(self, image=self.splash_img, text="")
         else:
             self.lbl_image = ctk.CTkLabel(
@@ -151,7 +151,7 @@ class App(ctk.CTk):
 
     def _load_step_1(self):
         self.splash.set_progress(0.25, "시스템 접속 환경 설정 로딩 중...")
-        self.title("PostgreSQL Production-Grade Performance Tuner (AST Core) v1.0.0")
+        self.title("PostgreSQL Production-Grade Performance Tuner (AST Core) v1.1.0")
         self.geometry("1150x800")
         self.db_config = ConfigManager.load_config()
 
@@ -233,12 +233,23 @@ class App(ctk.CTk):
     def create_workspace(self):
         self.workspace = ctk.CTkFrame(self, fg_color="transparent")
         self.workspace.grid(row=1, column=0, padx=20, pady=10, sticky="nsew")
-        self.workspace.grid_columnconfigure(0, weight=4)
-        self.workspace.grid_columnconfigure(1, weight=6)
         self.workspace.grid_rowconfigure(0, weight=1)
+        self.workspace.grid_columnconfigure(0, weight=1)
 
-        left_panel = ctk.CTkFrame(self.workspace, fg_color="#242629")
-        left_panel.grid(row=0, column=0, padx=(0, 10), pady=0, sticky="nsew")
+        self.paned_window = tk.PanedWindow(
+            self.workspace,
+            orient=tk.HORIZONTAL,
+            bd=0,
+            bg="#1C1D1F",
+            sashwidth=6,
+            sashrelief="flat",
+            sashpad=2,
+            opaqueresize=True,
+            cursor="sb_h_double_arrow",
+        )
+        self.paned_window.grid(row=0, column=0, sticky="nsew")
+
+        left_panel = ctk.CTkFrame(self.paned_window, fg_color="#242629")
         left_panel.grid_rowconfigure(1, weight=1)
         left_panel.grid_columnconfigure(0, weight=1)
 
@@ -311,8 +322,7 @@ class App(ctk.CTk):
         )
         self.btn_run.grid(row=2, column=0, padx=15, pady=15, sticky="ew")
 
-        right_panel = ctk.CTkFrame(self.workspace, fg_color="#242629")
-        right_panel.grid(row=0, column=1, padx=(10, 0), pady=0, sticky="nsew")
+        right_panel = ctk.CTkFrame(self.paned_window, fg_color="#242629")
         right_panel.grid_rowconfigure(1, weight=1)
         right_panel.grid_columnconfigure(0, weight=1)
 
@@ -345,9 +355,26 @@ class App(ctk.CTk):
         self.txt_result.bind("<Command-f>", lambda e: self.open_search_dialog(self.txt_result))
         self.txt_result.bind("<Command-F>", lambda e: self.open_search_dialog(self.txt_result))
 
-        # 마우스 클릭 시 하이라이트 제거용 이벤트 바인딩 (메모리 누수 방지를 위해 각 위젯당 최초 1회 등록)
+        # 마우스 클릭 시 하이라이트 제거용 이벤트 바인딩
         for tb in [self.txt_query._textbox, self.txt_result._textbox]:
             tb.bind("<Button-1>", self._clear_search_highlights, add="+")
+
+        # PanedWindow 패널 추가 (최소 크기 및 확장 속성 지정)
+        self.paned_window.add(left_panel, minsize=300, stretch="always")
+        self.paned_window.add(right_panel, minsize=350, stretch="always")
+
+        self.paned_window.bind("<Configure>", self._set_initial_sash_position, add="+")
+
+    def _set_initial_sash_position(self, event=None):
+        if not getattr(self, "_sash_initialized", False):
+            total_width = self.paned_window.winfo_width()
+            if total_width > 300:
+                sash_x = int(total_width * 0.42)
+                try:
+                    self.paned_window.sash_place(0, sash_x, 0)
+                    self._sash_initialized = True
+                except Exception:
+                    pass
 
     def _clear_search_highlights(self, event):
         """텍스트 박스 클릭 시 모든 검색 하이라이트 태그 제거"""
@@ -474,7 +501,9 @@ class App(ctk.CTk):
 
         conn_params = {key: entry.get().strip() for key, entry in self.entries.items()}
         self.btn_run.configure(state="disabled", text="⏳ 분석 진행 중...")
-        self._set_result_text("...데이터베이스 시스템 카탈로그 조회 및 AST 트리를 병합 분석하는 중입니다...")
+        self._set_result_text(
+            "...데이터베이스 시스템 카탈로그 조회 및 AST 트리를 병합 분석하는 중입니다..."
+        )
 
         t = threading.Thread(target=self.run_analysis, args=(query, conn_params), daemon=True)
         t.start()
@@ -515,7 +544,9 @@ class App(ctk.CTk):
                     if not explain_data:
                         self.after(
                             0,
-                            lambda: self._set_result_text("[안내] 수집된 실행계획 정보가 비어 있습니다."),
+                            lambda: self._set_result_text(
+                                "[안내] 수집된 실행계획 정보가 비어 있습니다."
+                            ),
                         )
                         return
 
@@ -547,7 +578,7 @@ class App(ctk.CTk):
 
                     self.after(
                         0,
-                        lambda: self.render_recommendations(raw_explain_text, all_recs),
+                        lambda: self.render_recommendations(raw_explain_text, all_recs, root_plan),
                     )
 
                 finally:
@@ -556,7 +587,9 @@ class App(ctk.CTk):
         except ValueError as err:
             self.after(
                 0,
-                lambda error_val=err: self._set_result_text_colored(f"❌ [안전 경고]\n\n{error_val!s}", self.color_pink),
+                lambda error_val=err: self._set_result_text_colored(
+                    f"❌ [안전 경고]\n\n{error_val!s}", self.color_pink
+                ),
             )
         except psycopg.errors.QueryCanceled as err:
             self.after(
@@ -576,7 +609,9 @@ class App(ctk.CTk):
                 before = query[:pos]
                 line_number = before.count("\n") + 1
                 error_preview = f"\n[오류 예상 위치: {line_number}번째 줄]\n"
-                error_preview += f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
+                error_preview += (
+                    f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
+                )
 
             self.after(
                 0,
@@ -628,17 +663,27 @@ class App(ctk.CTk):
         self.txt_result.insert("1.0", text)
         self.txt_result.configure(state="disabled")
 
-    def render_recommendations(self, raw_explain: str, recs: list[RecommendationModel]):
+    def render_recommendations(
+        self,
+        raw_explain: str,
+        recs: list[RecommendationModel],
+        root_plan: dict[str, Any] | None = None,
+    ):
         self.txt_result.configure(state="normal")
         self.txt_result.delete("1.0", "end")
         self.txt_result.configure(text_color=self.color_text_normal)
 
-        formatted_explain = PGPlanAnalyzer.format_explain_with_line_numbers(raw_explain)
+        formatted_explain = PGPlanAnalyzer.format_explain_with_line_numbers(raw_explain, root_plan)
 
         self.txt_result.insert("end", "========================================================\n")
         self.txt_result.insert("end", "🔍 [데이터베이스 실제 EXPLAIN 수립 결과]\n")
         self.txt_result.insert("end", "========================================================\n")
         self.txt_result.insert("end", f"{formatted_explain}\n\n")
+
+        if root_plan:
+            exec_process_report = PGPlanAnalyzer.generate_execution_process_report(root_plan)
+            if exec_process_report:
+                self.txt_result.insert("end", f"{exec_process_report}\n\n")
 
         self.txt_result.insert("end", "========================================================\n")
         self.txt_result.insert("end", "💡 [지식 기반 자동 튜닝 권장 리포트]\n")
@@ -661,13 +706,13 @@ class App(ctk.CTk):
                 lines_info = ""
                 if getattr(rec, "plan_lines", None) and len(rec.plan_lines) > 0:
                     if len(rec.plan_lines) == 1:
-                        lines_info = f"Line {rec.plan_lines[0]}"
+                        lines_info = f"SEQ {rec.plan_lines[0]}"
                     else:
-                        lines_info = f"Line {', '.join(map(str, rec.plan_lines))}"
+                        lines_info = f"SEQ {', '.join(map(str, rec.plan_lines))}"
                 elif getattr(rec, "plan_line", None) is not None:
-                    lines_info = f"Line {rec.plan_line}"
+                    lines_info = f"SEQ {rec.plan_line}"
 
-                node_str = rec.plan_node or 'Unknown'
+                node_str = rec.plan_node or "Unknown"
                 mapping_str = f"{lines_info} [{node_str}]" if lines_info else node_str
 
                 self.txt_result.insert("end", f"  • 실행계획 위치 : {mapping_str}\n")

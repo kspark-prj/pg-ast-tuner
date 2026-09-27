@@ -502,27 +502,29 @@ def test_assign_line_numbers_and_formatting():
 
     PGPlanAnalyzer.assign_line_numbers(root_plan, raw_explain)
 
-    assert root_plan["_line_number"] == 1
-    assert root_plan["Plans"][0]["_line_number"] == 3
-    assert root_plan["Plans"][1]["_line_number"] == 4
-    assert root_plan["Plans"][1]["Plans"][0]["_line_number"] == 5
+    assert root_plan["Plans"][0]["_line_number"] == 1
+    assert root_plan["Plans"][1]["Plans"][0]["_line_number"] == 2
+    assert root_plan["Plans"][1]["_line_number"] == 3
+    assert root_plan["_line_number"] == 4
 
-    formatted = PGPlanAnalyzer.format_explain_with_line_numbers(raw_explain)
-    assert "Line  1 | Hash Join" in formatted
-    assert "Line  3 |   ->  Seq Scan on t1" in formatted
+    formatted = PGPlanAnalyzer.format_explain_with_line_numbers(raw_explain, root_plan)
+    assert "SEQ  4 | Hash Join" in formatted
+    assert "SEQ  1 |   ->  Seq Scan on t1" in formatted
+    assert "SEQ  3 |   ->  Hash" in formatted
+    assert "SEQ  2 |         ->  Seq Scan on t2" in formatted
 
 
 def test_recommendation_line_mapping_integration():
     from core.parser import PGPlanAnalyzer
     from core.engine import RuleEngine
-    
+
     mock_provider = MagicMock()
     mock_provider.get_table_metadata.return_value = TableMetadata(
         table_name="t1",
         total_rows=100000,
         indices=[]
     )
-    
+
     raw_explain = (
         "Hash Join  (cost=1.23..4.56 rows=100 width=32)\n"
         "  Hash Cond: (t1.id = t2.t1_id)\n"
@@ -530,7 +532,7 @@ def test_recommendation_line_mapping_integration():
         "  ->  Hash  (cost=1.00..1.00 rows=10 width=16)\n"
         "        ->  Seq Scan on t2  (cost=0.00..1.00 rows=10 width=16)"
     )
-    
+
     root_plan = {
         "Node Type": "Hash Join",
         "Plans": [
@@ -543,22 +545,79 @@ def test_recommendation_line_mapping_integration():
             }
         ]
     }
-    
+
     PGPlanAnalyzer.assign_line_numbers(root_plan, raw_explain)
-    
+
     context = RuleContext(
         raw_query="SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id",
         clean_query="SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id",
         metadata_provider=mock_provider
     )
-    
+
     engine = RuleEngine(mock_provider)
     seq_node = root_plan["Plans"][0]
     recs = engine.analyze_node(context, seq_node)
-    
+
     assert len(recs) > 0
-    assert recs[0].plan_line == 3
-    assert 3 in recs[0].plan_lines
+    assert recs[0].plan_line == 1
+    assert 1 in recs[0].plan_lines
+
+
+def test_generate_execution_process_report():
+    from core.parser import PGPlanAnalyzer
+
+    raw_explain = (
+        "Hash Join  (cost=1.23..4.56 rows=100 width=32)\n"
+        "  Hash Cond: (t1.id = t2.t1_id)\n"
+        "  ->  Seq Scan on t1  (cost=0.00..2.20 rows=100 width=16)\n"
+        "  ->  Hash  (cost=1.00..1.00 rows=10 width=16)\n"
+        "        ->  Seq Scan on t2  (cost=0.00..1.00 rows=10 width=16)"
+    )
+
+    root_plan = {
+        "Node Type": "Hash Join",
+        "Actual Startup Time": 0.035,
+        "Actual Total Time": 0.050,
+        "Actual Rows": 100,
+        "Actual Loops": 1,
+        "Plans": [
+            {
+                "Node Type": "Seq Scan",
+                "Relation Name": "t1",
+                "Actual Startup Time": 0.015,
+                "Actual Total Time": 0.025,
+                "Actual Rows": 100,
+                "Actual Loops": 1,
+            },
+            {
+                "Node Type": "Hash",
+                "Actual Startup Time": 0.020,
+                "Actual Total Time": 0.020,
+                "Actual Rows": 10,
+                "Actual Loops": 1,
+                "Plans": [
+                    {
+                        "Node Type": "Seq Scan",
+                        "Relation Name": "t2",
+                        "Actual Startup Time": 0.010,
+                        "Actual Total Time": 0.018,
+                        "Actual Rows": 10,
+                        "Actual Loops": 1,
+                    }
+                ],
+            },
+        ],
+    }
+
+    PGPlanAnalyzer.assign_line_numbers(root_plan, raw_explain)
+    report = PGPlanAnalyzer.generate_execution_process_report(root_plan)
+
+    assert "📊 [단계별 실행 과정 분석 리포트 (실행 순서 기준)]" in report
+    assert "• [SEQ 1] Seq Scan (테이블: t1)" in report
+    assert "• [SEQ 2] Seq Scan (테이블: t2)" in report
+    assert "• [SEQ 3] Hash" in report
+    assert "• [SEQ 4] Hash Join" in report
+    assert "처리 실적:" in report
 
 
 
