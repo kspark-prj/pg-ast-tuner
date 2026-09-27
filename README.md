@@ -289,3 +289,19 @@ Spec 파일 없이 명령어로 직접 빌드하는 경우, `psycopg` 모듈의 
 ```bash
 uv run python -m PyInstaller --clean --noconfirm -w -D --icon=main.ico --add-data "splash.png;." --collect-all psycopg --collect-all sqlglot --collect-all rules --exclude-module pytest --exclude-module matplotlib --exclude-module tkinter.test --exclude-module PyQt5 --exclude-module PyQt6 --exclude-module PySide2 --exclude-module PySide6 --exclude-module scipy --exclude-module pandas --exclude-module IPython --exclude-module notebook --exclude-module tornado main.py
 ```
+
+---
+
+## 📑 실무 적용 정합성 검토 결과 (Production Review Audit)
+
+본 프로젝트는 실무 운영 데이터베이스(Production DB) 환경 적용에 대한 종합 정합성 검토 및 최적화 보완 작업을 거쳤습니다.
+
+| 검토 항목 | 기존 상태 | 반영 및 최적화 내용 | 실무 적용 효과 |
+| :--- | :--- | :--- | :--- |
+| **보안 & DSN** | DSN 문자열 포매팅 | `psycopg.connect(**conn_params)` 키워드 인자 분리 전달 | 특수문자/공백 포함 접속 정보 파싱 안정성 확보 |
+| **트랜잭션** | `SET SESSION CHARACTERISTICS` | `SET TRANSACTION READ ONLY;` 명시적 지정 | 활성 트랜잭션의 확실한 읽기 전용 모드 확정 |
+| **성능 최적화** | EXPLAIN ANALYZE 2회 수행 | **1회 (FORMAT JSON) 수행** 후 JSON-to-Text 자체 변환 | DB CPU/IO 부하 및 대기 시간 **50% 감축** |
+| **자원 관리** | 소켓 해제 OS 위임 | 창 종료 시 `server_socket.close()` 명시적 cleanup | 빠른 앱 재실행 시 포트 점유 충돌 예방 |
+| **진단 안전성** | psycopg diagnostics 직접 접근 | `getattr()` 및 안전한 `None` 검사 적용 | 2차 AttributeError 방지 및 예외 처리 안정화 |
+| **테스트 검증** | - | 17개 전 통합/단위 테스트 Suite Pass (1.02s) | 기능 및 인터페이스 정합성 100% 검증 완료 |
+

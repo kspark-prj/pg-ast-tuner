@@ -338,6 +338,112 @@ class PGPlanAnalyzer:
         traverse_post_order(root_plan)
 
     @staticmethod
+    def render_json_plan_to_text(plan_node: dict[str, Any], indent_level: int = 0) -> str:
+        """JSON 실행계획 트리를 표준 PostgreSQL EXPLAIN 텍스트 형식으로 변환합니다 (단일 DB 실행 지원)."""
+        if not plan_node:
+            return ""
+
+        lines: list[str] = []
+        indent = "  " * indent_level
+        prefix = "->  " if indent_level > 0 else ""
+
+        node_type = plan_node.get("Node Type", "")
+        rel_name = plan_node.get("Relation Name", "")
+        alias = plan_node.get("Alias", "")
+        idx_name = plan_node.get("Index Name", "")
+        subplan_name = plan_node.get("Subplan Name", "")
+
+        target_parts = []
+        if rel_name:
+            target_parts.append(f"on {rel_name}")
+            if alias and alias != rel_name:
+                target_parts.append(f"{alias}")
+        if idx_name:
+            target_parts.append(f"using {idx_name}")
+        if subplan_name:
+            target_parts.append(f"for {subplan_name}")
+
+        target_str = (" " + " ".join(target_parts)) if target_parts else ""
+
+        cost_start = plan_node.get("Startup Cost")
+        cost_total = plan_node.get("Total Cost")
+        plan_rows = plan_node.get("Plan Rows")
+        plan_width = plan_node.get("Plan Width")
+
+        cost_str = ""
+        if cost_total is not None and plan_rows is not None:
+            width_str = f" width={plan_width}" if plan_width is not None else ""
+            cost_str = f" (cost={cost_start:.2f}..{cost_total:.2f} rows={plan_rows}{width_str})"
+
+        act_startup = plan_node.get("Actual Startup Time")
+        act_total = plan_node.get("Actual Total Time")
+        act_rows = plan_node.get("Actual Rows")
+        act_loops = plan_node.get("Actual Loops")
+
+        actual_str = ""
+        if act_total is not None and act_rows is not None and act_loops is not None:
+            startup_val = f"{act_startup:.3f}.." if act_startup is not None else ""
+            actual_str = f" (actual time={startup_val}{act_total:.3f} rows={act_rows} loops={act_loops})"
+
+        main_line = f"{indent}{prefix}{node_type}{target_str}{cost_str}{actual_str}"
+        lines.append(main_line)
+
+        info_indent = "  " * (indent_level + (2 if indent_level > 0 else 1))
+
+        if "Index Cond" in plan_node:
+            lines.append(f"{info_indent}Index Cond: {plan_node['Index Cond']}")
+        if "Filter" in plan_node:
+            lines.append(f"{info_indent}Filter: {plan_node['Filter']}")
+            if plan_node.get("Rows Removed by Filter"):
+                lines.append(f"{info_indent}Rows Removed by Filter: {plan_node['Rows Removed by Filter']}")
+        if "Hash Cond" in plan_node:
+            lines.append(f"{info_indent}Hash Cond: {plan_node['Hash Cond']}")
+        if "Merge Cond" in plan_node:
+            lines.append(f"{info_indent}Merge Cond: {plan_node['Merge Cond']}")
+        if "Sort Key" in plan_node:
+            sort_keys = plan_node["Sort Key"]
+            keys_str = ", ".join(sort_keys) if isinstance(sort_keys, list) else str(sort_keys)
+            sort_method = plan_node.get("Sort Method", "")
+            sort_type = plan_node.get("Sort Space Type", "")
+            sort_space = plan_node.get("Sort Space Used", "")
+            method_str = f" Sort Method: {sort_method}" if sort_method else ""
+            space_str = f"  Memory: {sort_space}kB" if sort_type == "Memory" and sort_space else (f"  Disk: {sort_space}kB" if sort_space else "")
+            lines.append(f"{info_indent}Sort Key: {keys_str}")
+            if method_str or space_str:
+                lines.append(f"{info_indent}{method_str.strip()}{space_str}")
+
+        hit_blocks = plan_node.get("Shared Hit Blocks", 0)
+        read_blocks = plan_node.get("Shared Read Blocks", 0)
+        dirtied_blocks = plan_node.get("Shared Dirtied Blocks", 0)
+        written_blocks = plan_node.get("Shared Written Blocks", 0)
+        temp_read = plan_node.get("Temp Read Blocks", 0)
+        temp_written = plan_node.get("Temp Written Blocks", 0)
+
+        buf_parts = []
+        if hit_blocks > 0 or read_blocks > 0 or dirtied_blocks > 0 or written_blocks > 0:
+            shared_parts = []
+            if hit_blocks > 0: shared_parts.append(f"hit={hit_blocks}")
+            if read_blocks > 0: shared_parts.append(f"read={read_blocks}")
+            if dirtied_blocks > 0: shared_parts.append(f"dirtied={dirtied_blocks}")
+            if written_blocks > 0: shared_parts.append(f"written={written_blocks}")
+            buf_parts.append(f"shared {' '.join(shared_parts)}")
+        if temp_read > 0 or temp_written > 0:
+            temp_parts = []
+            if temp_read > 0: temp_parts.append(f"read={temp_read}")
+            if temp_written > 0: temp_parts.append(f"written={temp_written}")
+            buf_parts.append(f"temp {' '.join(temp_parts)}")
+
+        if buf_parts:
+            lines.append(f"{info_indent}Buffers: {', '.join(buf_parts)}")
+
+        for child in plan_node.get("Plans", []):
+            child_text = PGPlanAnalyzer.render_json_plan_to_text(child, indent_level + 1)
+            if child_text:
+                lines.append(child_text)
+
+        return "\n".join(lines)
+
+    @staticmethod
     def format_explain_with_line_numbers(
         raw_explain_text: str, root_plan: dict[str, Any] | None = None
     ) -> str:

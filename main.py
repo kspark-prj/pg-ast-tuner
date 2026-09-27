@@ -134,6 +134,9 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
 
+        # 메인 창 종료 핸들러 등록 (소켓 자원 해제)
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
         # 메인 창 숨김
         self.withdraw()
 
@@ -142,6 +145,16 @@ class App(ctk.CTk):
 
         # [Zero-Flicker Step 2] 핸드오버 지연 버퍼 (80ms) 적용
         self.after(80, self._handover_and_start_loading)
+
+    def on_closing(self):
+        """종료 시 단일 인스턴스 검증용 소켓을 명시적으로 닫습니다."""
+        global server_socket
+        if "server_socket" in globals() and server_socket:
+            try:
+                server_socket.close()
+            except Exception:
+                pass
+        self.destroy()
 
     def _handover_and_start_loading(self):
         if pyi_splash and pyi_splash.is_alive():
@@ -376,12 +389,14 @@ class App(ctk.CTk):
                 except Exception:
                     pass
 
-    def _clear_search_highlights(self, event):
-        """텍스트 박스 클릭 시 모든 검색 하이라이트 태그 제거"""
-        widget = event.widget
+    def _clear_search_highlights(self, event=None, widget=None):
+        """텍스트 박스 클릭 또는 프로그램 재검색 시 기존 하이라이트 태그 제거"""
+        w = widget if widget is not None else (getattr(event, "widget", None) if event else None)
+        if w is None:
+            return
         try:
-            widget.tag_remove("search_highlight", "1.0", "end")
-            widget.tag_remove("search_current", "1.0", "end")
+            w.tag_remove("search_highlight", "1.0", "end")
+            w.tag_remove("search_current", "1.0", "end")
         except Exception:
             pass
 
@@ -396,7 +411,7 @@ class App(ctk.CTk):
         inner_text = target_textbox._textbox
 
         # 기존 하이라이트 태그 초기화
-        self._clear_search_highlights(type("Event", (object,), {"widget": inner_text})())
+        self._clear_search_highlights(widget=inner_text)
 
         # 1. 전체 검색 결과 하이라이트 스타일
         inner_text.tag_config("search_highlight", background="#2F5C8F", foreground="#FFFFFF")
@@ -512,33 +527,42 @@ class App(ctk.CTk):
     def get_error_message(err: Any) -> str:
         if err is None:
             return "알 수 없는 에러가 발생했습니다."
-        if hasattr(err, "diagnostics") and err.diagnostics:
-            diag = err.diagnostics
-            if hasattr(diag, "message_primary") and diag.message_primary:
-                return str(diag.message_primary)
-        if hasattr(err, "pgerror") and err.pgerror:
-            return str(err.pgerror)
+        diag = getattr(err, "diagnostics", None)
+        if diag:
+            msg = getattr(diag, "message_primary", None)
+            if msg:
+                return str(msg)
+        pgerr = getattr(err, "pgerror", None)
+        if pgerr:
+            return str(pgerr)
         return str(err).strip()
 
     def run_analysis(self, query: str, conn_params: dict[str, str]):
-        dsn = (
-            f"host={conn_params['host']} port={conn_params['port']} "
-            f"dbname={conn_params['dbname']} user={conn_params['user']} "
-            f"password={conn_params['password']}"
-        )
+        host = conn_params.get("host", "localhost")
+        port = int(conn_params.get("port", 5432)) if conn_params.get("port") else 5432
+        dbname = conn_params.get("dbname", "")
+        user = conn_params.get("user", "")
+        password = conn_params.get("password", "")
 
         try:
-            with psycopg.connect(dsn, connect_timeout=5) as conn:
+            with psycopg.connect(
+                host=host,
+                port=port,
+                dbname=dbname,
+                user=user,
+                password=password,
+                connect_timeout=5,
+            ) as conn:
                 conn.autocommit = False
                 with conn.cursor() as sys_cur:
-                    sys_cur.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY;")
+                    sys_cur.execute("SET TRANSACTION READ ONLY;")
 
                 try:
                     metadata_provider = PGMetadataProvider(conn)
                     plan_analyzer = PGPlanAnalyzer(conn)
                     rule_engine = RuleEngine(metadata_provider)
 
-                    raw_explain_text = plan_analyzer.execute_explain_text(query)
+                    # EXPLAIN ANALYZE 1회 실행으로 DB 부하 최적화
                     explain_data = plan_analyzer.execute_explain_json(query)
 
                     if not explain_data:
@@ -551,6 +575,7 @@ class App(ctk.CTk):
                         return
 
                     root_plan = explain_data[0].get("Plan", {})
+                    raw_explain_text = plan_analyzer.render_json_plan_to_text(root_plan)
                     plan_analyzer.assign_line_numbers(root_plan, raw_explain_text)
                     target_nodes = plan_analyzer.find_problematic_nodes(root_plan)
 
@@ -601,8 +626,8 @@ class App(ctk.CTk):
                 ),
             )
         except psycopg.errors.SyntaxError as err:
-            diag = err.diagnostics  # type:ignore
-            err_pos = diag.statement_position if diag else None
+            diag = getattr(err, "diagnostics", None)
+            err_pos = getattr(diag, "statement_position", None) if diag else None
             error_preview = ""
             if err_pos and err_pos > 0:
                 pos = err_pos - 1
@@ -612,6 +637,15 @@ class App(ctk.CTk):
                 error_preview += (
                     f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
                 )
+
+            self.after(
+                0,
+                lambda error_val=err, preview_val=error_preview: self._set_result_text_colored(
+                    f"❌ [SQL 문법 오류 감지]\n작성하신 SQL 구문에 표준 PostgreSQL 문법에 맞지 않는 부분이 있습니다.\n"
+                    f"{preview_val}\n\n상세 메시지: {self.get_error_message(error_val)}",
+                    self.color_pink,
+                ),
+            )
 
             self.after(
                 0,
