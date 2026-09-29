@@ -20,6 +20,7 @@ import psycopg
 from PIL import Image
 
 # 모듈화 패키지 임포트
+from autoupdater import AutoUpdater
 from config import ConfigManager, HistoryManager
 from core.catalog import PGMetadataProvider
 from core.engine import RuleEngine
@@ -241,7 +242,18 @@ class App(ctk.CTk):
             text_color=self.color_text_normal,
             command=self.save_config,
         )
-        self.btn_save.grid(row=0, column=10, padx=10, pady=12, sticky="e")
+        self.btn_save.grid(row=0, column=10, padx=(10, 4), pady=12, sticky="e")
+
+        self.btn_update = ctk.CTkButton(
+            self.header_frame,
+            text="업데이트",
+            width=80,
+            fg_color="#34373C",
+            hover_color="#454A52",
+            text_color=self.color_text_normal,
+            command=self.check_update,
+        )
+        self.btn_update.grid(row=0, column=11, padx=(4, 10), pady=12, sticky="e")
 
     def create_workspace(self):
         self.workspace = ctk.CTkFrame(self, fg_color="transparent")
@@ -458,6 +470,14 @@ class App(ctk.CTk):
         config_data = {key: entry.get().strip() for key, entry in self.entries.items()}
         ConfigManager.save_config(config_data)
         messagebox.showinfo("성공", "데이터베이스 접속 설정이 로컬 파일에 안전하게 기록되었습니다.")
+
+    def check_update(self):
+        updater = AutoUpdater(
+            app_name="stg",  # 모노레포 내 앱 식별자
+            current_version="1.0.0",  # 현재 프로그램 버전
+            github_repo="kspark-prj/python-gui-monorepo",  # GitHub 저장소 (owner/repo)
+        )
+        updater.check_for_update()
 
     def _format_history_label(self, item: dict) -> str:
         """쿼리 이력 항목을 드롭다운 표시용 포맷으로 변환"""
