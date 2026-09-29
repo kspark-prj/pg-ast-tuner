@@ -473,8 +473,8 @@ class App(ctk.CTk):
 
     def check_update(self):
         updater = AutoUpdater(
-            app_name="stg",  # 모노레포 내 앱 식별자
-            current_version="1.0.0",  # 현재 프로그램 버전
+            app_name="pge",  # 모노레포 내 앱 식별자
+            current_version="1.1.2",  # 현재 프로그램 버전
             github_repo="kspark-prj/python-gui-monorepo",  # GitHub 저장소 (owner/repo)
         )
         updater.check_for_update()
