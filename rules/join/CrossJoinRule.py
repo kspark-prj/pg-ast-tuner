@@ -32,17 +32,25 @@ class CrossJoinRule(BaseRule):
         # Nested Loop의 경우, 내부 구동 테이블(inner plan)의 인덱스 조건이나 필터 등에서
         # 외부 테이블의 컬럼/별칭을 참조하여 Parameterized 된 조인을 수행하는지 체크합니다.
         # Parameterized Nested Loop는 카티시안 곱(Cross Join)이 아니므로 제외합니다.
+        # Nested Loop의 경우, 내부 구동 테이블(inner plan)의 인덱스 조건이나 필터 등에서
+        # 외부 테이블의 컬럼/별칭을 참조하여 Parameterized 된 조인을 수행하거나,
+        # Index Cond / Recheck Cond 및 행 수 조합 상쇄가 존재하는지 체크합니다.
+        # 이 경우 카티시안 곱(Cross Join) 오진을 방지하기 위해 진단 대상에서 제외합니다.
         if is_cross_join and node_type == "Nested Loop":
             plans = node.get("Plans", [])
             if len(plans) >= 2:
                 outer_plan = plans[0]
                 inner_plan = plans[1]
 
-                # 외부 테이블의 별칭(Alias) 및 릴레이션명(Relation Name) 수집
                 outer_aliases = self._collect_aliases(outer_plan)
 
-                # 내부 테이블의 조건절 등에서 외부 테이블 별칭을 참조하는지 확인
-                if self._is_parameterized(inner_plan, outer_aliases):
+                # 예외 규칙 1: Inner side 노드(Index Scan, Bitmap Index Scan 등)에
+                # Index Cond 또는 Recheck Cond 형태로 Outer 테이블 키 조건/매개변수가 전달된 경우
+                if self._is_parameterized_scan(inner_plan, outer_aliases):
+                    is_cross_join = False
+                # 예외 규칙 2: Outer 출력 행 수 × Inner 출력 행 수의 조합이 전체 테이블 Cross Join과 다르고
+                # Index Cond / Recheck Cond 및 특정 조건으로 상쇄된 경우
+                elif self._is_constrained_row_count(node, outer_plan, inner_plan):
                     is_cross_join = False
 
         if is_cross_join:
@@ -64,44 +72,95 @@ class CrossJoinRule(BaseRule):
 
     def _collect_aliases(self, node: dict) -> set[str]:
         aliases = set()
-        if "Relation Name" in node:
-            aliases.add(node["Relation Name"])
-        if "Alias" in node:
-            aliases.add(node["Alias"])
-        if "CTE Name" in node:
-            aliases.add(node["CTE Name"])
+        for key in ("Relation Name", "Alias", "CTE Name"):
+            val = node.get(key)
+            if val and isinstance(val, str):
+                aliases.add(val)
+                clean_val = val.replace('"', '').strip()
+                if clean_val:
+                    aliases.add(clean_val)
 
         for sub_plan in node.get("Plans", []):
             aliases.update(self._collect_aliases(sub_plan))
         return aliases
 
-    def _is_parameterized(self, node: dict, outer_aliases: set[str]) -> bool:
-        if not outer_aliases:
-            return False
+    def _is_parameterized_scan(self, node: dict, outer_aliases: set[str]) -> bool:
+        """
+        Inner side 노드(Index Scan, Bitmap Index Scan 등)에 Index Cond 또는 Recheck Cond
+        형태로 Outer 테이블 키 조건이나 매개변수($N)가 전달되었는지 확인합니다.
+        """
+        index_cond = node.get("Index Cond", "")
+        recheck_cond = node.get("Recheck Cond", "")
+        filter_cond = node.get("Filter", "")
 
-        excluded_keys = {
-            "Node Type",
-            "Parent Relationship",
-            "Relation Name",
-            "Alias",
-            "Index Name",
-            "CTE Name",
-            "Schema",
-            "Database",
-        }
+        cond_texts = [str(index_cond), str(recheck_cond), str(filter_cond)]
+        combined_text = " ".join(cond_texts)
 
-        for key, value in node.items():
-            if key in excluded_keys:
+        # 1. Parameterized parameter reference e.g., $0, $1
+        if re.search(r"\$\d+", combined_text):
+            return True
+
+        # 2. Reference to outer table aliases/columns
+        for alias in outer_aliases:
+            if not alias:
                 continue
-            if isinstance(value, str):
-                for alias in outer_aliases:
-                    pattern = rf'(?<![a-zA-Z0-9_])"?{re.escape(alias)}"?\.'
-                    if re.search(pattern, value):
-                        return True
-
-        for sub_plan in node.get("Plans", []):
-            if self._is_parameterized(sub_plan, outer_aliases):
+            escaped = re.escape(alias)
+            pattern = rf'(?<![a-zA-Z0-9_])"?{escaped}"?\.'
+            if re.search(pattern, combined_text, re.IGNORECASE):
+                return True
+            if (index_cond or recheck_cond) and re.search(rf'\b{escaped}\b', combined_text, re.IGNORECASE):
                 return True
 
+        # 3. Check any string field in current node
+        for key, val in node.items():
+            if key in ("Node Type", "Parent Relationship", "Relation Name", "Alias", "Index Name", "CTE Name"):
+                continue
+            if isinstance(val, str):
+                if re.search(r"\$\d+", val):
+                    return True
+                for alias in outer_aliases:
+                    if alias and re.search(rf'(?<![a-zA-Z0-9_])"?{re.escape(alias)}"?\.', val, re.IGNORECASE):
+                        return True
+
+        # 4. Recursively check child sub-plans
+        for sub_plan in node.get("Plans", []):
+            if self._is_parameterized_scan(sub_plan, outer_aliases):
+                return True
+
+        return False
+
+    def _is_constrained_row_count(self, node: dict, outer_plan: dict, inner_plan: dict) -> bool:
+        """
+        Outer 출력 행 수 × Inner 출력 행 수의 조합이 전체 테이블 Cross Join 결과와 다르고
+        Index Cond / Recheck Cond 또는 특정 조건으로 상쇄된 경우 Cartesian Product 오진을 방지합니다.
+        """
+        # Inner plan 서브트리에 Index Cond 또는 Recheck Cond가 명시된 경우 (인덱스 탐색 조건)
+        if self._has_index_or_recheck_cond(inner_plan):
+            return True
+
+        outer_actual_rows = outer_plan.get("Actual Rows")
+        inner_actual_rows = inner_plan.get("Actual Rows")
+        inner_loops = inner_plan.get("Actual Loops", 1)
+        node_actual_rows = node.get("Actual Rows")
+
+        # Inner side가 반복 실행(Actual Loops > 1)되면서 루프당 출력 행이 제한된 소량인 경우
+        if inner_loops is not None and inner_loops > 1:
+            if inner_actual_rows is not None and inner_actual_rows <= 10:
+                return True
+
+        # Outer 행 수 * Inner 행 수의 결과가 전체 카티시안 곱 수치와 다르고 상쇄된 경우
+        if outer_actual_rows is not None and inner_actual_rows is not None and node_actual_rows is not None:
+            cartesian_product_estimate = outer_actual_rows * inner_actual_rows
+            if node_actual_rows < cartesian_product_estimate or inner_actual_rows == 0:
+                return True
+
+        return False
+
+    def _has_index_or_recheck_cond(self, node: dict) -> bool:
+        if "Index Cond" in node or "Recheck Cond" in node:
+            return True
+        for sub in node.get("Plans", []):
+            if self._has_index_or_recheck_cond(sub):
+                return True
         return False
 

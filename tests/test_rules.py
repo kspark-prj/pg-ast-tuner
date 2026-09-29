@@ -319,6 +319,52 @@ def test_cross_join_rule_parameterized_nested_loop():
     assert len(recs) == 0
 
 
+def test_cross_join_rule_index_recheck_cond_exception():
+    from rules.join.CrossJoinRule import CrossJoinRule
+    context = RuleContext(
+        raw_query="SELECT * FROM target_categories tc LEFT JOIN products p ON tc.category_id = p.category_id",
+        clean_query="SELECT * FROM target_categories tc LEFT JOIN products p ON tc.category_id = p.category_id",
+        metadata_provider=MagicMock()
+    )
+    rule = CrossJoinRule()
+    node = {
+        "Node Type": "Nested Loop",
+        "Plans": [
+            {"Node Type": "Values Scan", "Alias": "*VALUES*"},
+            {
+                "Node Type": "Index Scan",
+                "Relation Name": "products",
+                "Alias": "p",
+                "Index Cond": "(category_id = \"*VALUES*\".column1)"
+            }
+        ]
+    }
+    assert rule.match(context, node) is True
+    recs = rule.analyze(context, node)
+    assert len(recs) == 0  # Should NOT flag Cartesian product
+
+
+def test_cross_join_rule_constrained_row_count_exception():
+    from rules.join.CrossJoinRule import CrossJoinRule
+    context = RuleContext(
+        raw_query="SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id",
+        clean_query="SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id",
+        metadata_provider=MagicMock()
+    )
+    rule = CrossJoinRule()
+    node = {
+        "Node Type": "Nested Loop",
+        "Actual Rows": 10,
+        "Plans": [
+            {"Node Type": "Seq Scan", "Relation Name": "t1", "Alias": "t1", "Actual Rows": 10},
+            {"Node Type": "Index Scan", "Relation Name": "t2", "Alias": "t2", "Actual Rows": 1, "Actual Loops": 10, "Index Cond": "(t1_id = t1.id)"}
+        ]
+    }
+    assert rule.match(context, node) is True
+    recs = rule.analyze(context, node)
+    assert len(recs) == 0  # Constrained row count (1 row per loop) -> No false positive
+
+
 def test_index_scan_and_seq_scan_rule_no_meta_safe():
     from rules.scan.index_scan_rule import IndexScanRule
     from rules.scan.seq_scan_rule import SeqScanRule
@@ -502,16 +548,16 @@ def test_assign_line_numbers_and_formatting():
 
     PGPlanAnalyzer.assign_line_numbers(root_plan, raw_explain)
 
-    assert root_plan["Plans"][0]["_line_number"] == 1
-    assert root_plan["Plans"][1]["Plans"][0]["_line_number"] == 2
-    assert root_plan["Plans"][1]["_line_number"] == 3
+    assert root_plan["Plans"][0]["_line_number"] == 3
+    assert root_plan["Plans"][1]["Plans"][0]["_line_number"] == 1
+    assert root_plan["Plans"][1]["_line_number"] == 2
     assert root_plan["_line_number"] == 4
 
     formatted = PGPlanAnalyzer.format_explain_with_line_numbers(raw_explain, root_plan)
     assert "SEQ  4 | Hash Join" in formatted
-    assert "SEQ  1 |   ->  Seq Scan on t1" in formatted
-    assert "SEQ  3 |   ->  Hash" in formatted
-    assert "SEQ  2 |         ->  Seq Scan on t2" in formatted
+    assert "SEQ  3 |   ->  Seq Scan on t1" in formatted
+    assert "SEQ  2 |   ->  Hash" in formatted
+    assert "SEQ  1 |         ->  Seq Scan on t2" in formatted
 
 
 def test_recommendation_line_mapping_integration():
@@ -559,8 +605,8 @@ def test_recommendation_line_mapping_integration():
     recs = engine.analyze_node(context, seq_node)
 
     assert len(recs) > 0
-    assert recs[0].plan_line == 1
-    assert 1 in recs[0].plan_lines
+    assert recs[0].plan_line == 3
+    assert 3 in recs[0].plan_lines
 
 
 def test_generate_execution_process_report():
@@ -613,9 +659,9 @@ def test_generate_execution_process_report():
     report = PGPlanAnalyzer.generate_execution_process_report(root_plan)
 
     assert "📊 [단계별 실행 과정 분석 리포트 (실행 순서 기준)]" in report
-    assert "• [SEQ 1] Seq Scan (테이블: t1)" in report
-    assert "• [SEQ 2] Seq Scan (테이블: t2)" in report
-    assert "• [SEQ 3] Hash" in report
+    assert "• [SEQ 1] Seq Scan (테이블: t2)" in report
+    assert "• [SEQ 2] Hash" in report
+    assert "• [SEQ 3] Seq Scan (테이블: t1)" in report
     assert "• [SEQ 4] Hash Join" in report
     assert "처리 실적:" in report
 

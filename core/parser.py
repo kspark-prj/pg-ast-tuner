@@ -1,10 +1,10 @@
-import re
 import json
-from datetime import datetime, timedelta
+import re
 from typing import Any
+
 import psycopg
-from psycopg import sql
 import sqlglot
+from psycopg import sql
 from sqlglot import exp
 
 
@@ -24,44 +24,46 @@ class PGPlanAnalyzer:
     )
 
     # 분석 대상 노드 타입 집합 (모든 규칙의 TARGET_NODE_TYPES 합집합)
-    _PROBLEMATIC_NODE_TYPES: frozenset[str] = frozenset({
-        # Scan
-        "Seq Scan",
-        "Index Scan",
-        "Index Only Scan",
-        "Bitmap Heap Scan",
-        "Bitmap Index Scan",
-        "CTE Scan",
-        "Subquery Scan",
-        "Foreign Scan",
-        "Function Scan",
-        "Values Scan",
-        "WorkTable Scan",
-        "Sample Scan",
-        # Join
-        "Hash Join",
-        "Nested Loop",
-        "Merge Join",
-        "Gather",
-        "Gather Merge",
-        "Memoize",
-        # Sort / Aggregate / Hash / Memory / Window / Lock
-        "Sort",
-        "Hash",
-        "Aggregate",
-        "Incremental Sort",
-        "WindowAgg",
-        "Materialize",
-        "LockRows",
-        "Limit",
-        "BitmapAnd",
-        "BitmapOr",
-        # DML (ConstraintTriggerOverheadRule, HotUpdateFailureRule 등)
-        "ModifyTable",
-        "Update",
-        "Insert",
-        "Delete",
-    })
+    _PROBLEMATIC_NODE_TYPES: frozenset[str] = frozenset(
+        {
+            # Scan
+            "Seq Scan",
+            "Index Scan",
+            "Index Only Scan",
+            "Bitmap Heap Scan",
+            "Bitmap Index Scan",
+            "CTE Scan",
+            "Subquery Scan",
+            "Foreign Scan",
+            "Function Scan",
+            "Values Scan",
+            "WorkTable Scan",
+            "Sample Scan",
+            # Join
+            "Hash Join",
+            "Nested Loop",
+            "Merge Join",
+            "Gather",
+            "Gather Merge",
+            "Memoize",
+            # Sort / Aggregate / Hash / Memory / Window / Lock
+            "Sort",
+            "Hash",
+            "Aggregate",
+            "Incremental Sort",
+            "WindowAgg",
+            "Materialize",
+            "LockRows",
+            "Limit",
+            "BitmapAnd",
+            "BitmapOr",
+            # DML (ConstraintTriggerOverheadRule, HotUpdateFailureRule 등)
+            "ModifyTable",
+            "Update",
+            "Insert",
+            "Delete",
+        }
+    )
 
     def __init__(self, conn: psycopg.Connection):
         self.conn = conn
@@ -69,10 +71,7 @@ class PGPlanAnalyzer:
     @staticmethod
     def clean_query_comments(query: str) -> str:
         query = re.sub(r"/\*.*?\*/", "", query, flags=re.DOTALL)
-        clean_lines = [
-            re.sub(r"--.*$", "", line)
-            for line in query.split("\n")
-        ]
+        clean_lines = [re.sub(r"--.*$", "", line) for line in query.split("\n")]
         return "\n".join(line for line in clean_lines if line.strip()).strip()
 
     def _is_unsafe_query(self, clean_sql: str) -> bool:
@@ -258,7 +257,16 @@ class PGPlanAnalyzer:
                 where_clause_text = where_match.group(1)
                 candidates = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", where_clause_text)
                 keywords = {
-                    "and", "or", "in", "is", "null", "not", "between", "like", "true", "false",
+                    "and",
+                    "or",
+                    "in",
+                    "is",
+                    "null",
+                    "not",
+                    "between",
+                    "like",
+                    "true",
+                    "false",
                 }
                 where_cols = list({c.lower() for c in candidates if c.lower() not in keywords})
 
@@ -329,8 +337,40 @@ class PGPlanAnalyzer:
 
         exec_counter = [1]
 
+        def get_subtree_min_startup(node: dict[str, Any]) -> float | None:
+            startup = node.get("Actual Startup Time")
+            min_val = float(startup) if startup is not None else float("inf")
+            for sub in node.get("Plans", []):
+                c_min = get_subtree_min_startup(sub)
+                if c_min is not None and c_min < min_val:
+                    min_val = c_min
+            return min_val if min_val != float("inf") else None
+
+        def get_ordered_children(node: dict[str, Any]) -> list[dict[str, Any]]:
+            plans = node.get("Plans", [])
+            if not plans or len(plans) <= 1:
+                return plans
+
+            node_type = node.get("Node Type", "")
+            child_info = []
+            for i, child in enumerate(plans):
+                min_startup = get_subtree_min_startup(child)
+                default_rank = i
+                if node_type == "Hash Join" and len(plans) == 2:
+                    default_rank = 0 if i == 1 else 1
+
+                sort_key = (
+                    min_startup if min_startup is not None else float("inf"),
+                    default_rank,
+                )
+                child_info.append((sort_key, child))
+
+            child_info.sort(key=lambda x: x[0])
+            return [x[1] for x in child_info]
+
         def traverse_post_order(node: dict[str, Any]) -> None:
-            for sub_plan in node.get("Plans", []):
+            ordered_children = get_ordered_children(node)
+            for sub_plan in ordered_children:
                 traverse_post_order(sub_plan)
             node["_line_number"] = exec_counter[0]
             exec_counter[0] += 1
@@ -383,7 +423,9 @@ class PGPlanAnalyzer:
         actual_str = ""
         if act_total is not None and act_rows is not None and act_loops is not None:
             startup_val = f"{act_startup:.3f}.." if act_startup is not None else ""
-            actual_str = f" (actual time={startup_val}{act_total:.3f} rows={act_rows} loops={act_loops})"
+            actual_str = (
+                f" (actual time={startup_val}{act_total:.3f} rows={act_rows} loops={act_loops})"
+            )
 
         main_line = f"{indent}{prefix}{node_type}{target_str}{cost_str}{actual_str}"
         lines.append(main_line)
@@ -395,7 +437,9 @@ class PGPlanAnalyzer:
         if "Filter" in plan_node:
             lines.append(f"{info_indent}Filter: {plan_node['Filter']}")
             if plan_node.get("Rows Removed by Filter"):
-                lines.append(f"{info_indent}Rows Removed by Filter: {plan_node['Rows Removed by Filter']}")
+                lines.append(
+                    f"{info_indent}Rows Removed by Filter: {plan_node['Rows Removed by Filter']}"
+                )
         if "Hash Cond" in plan_node:
             lines.append(f"{info_indent}Hash Cond: {plan_node['Hash Cond']}")
         if "Merge Cond" in plan_node:
@@ -407,7 +451,11 @@ class PGPlanAnalyzer:
             sort_type = plan_node.get("Sort Space Type", "")
             sort_space = plan_node.get("Sort Space Used", "")
             method_str = f" Sort Method: {sort_method}" if sort_method else ""
-            space_str = f"  Memory: {sort_space}kB" if sort_type == "Memory" and sort_space else (f"  Disk: {sort_space}kB" if sort_space else "")
+            space_str = (
+                f"  Memory: {sort_space}kB"
+                if sort_type == "Memory" and sort_space
+                else (f"  Disk: {sort_space}kB" if sort_space else "")
+            )
             lines.append(f"{info_indent}Sort Key: {keys_str}")
             if method_str or space_str:
                 lines.append(f"{info_indent}{method_str.strip()}{space_str}")
@@ -422,15 +470,21 @@ class PGPlanAnalyzer:
         buf_parts = []
         if hit_blocks > 0 or read_blocks > 0 or dirtied_blocks > 0 or written_blocks > 0:
             shared_parts = []
-            if hit_blocks > 0: shared_parts.append(f"hit={hit_blocks}")
-            if read_blocks > 0: shared_parts.append(f"read={read_blocks}")
-            if dirtied_blocks > 0: shared_parts.append(f"dirtied={dirtied_blocks}")
-            if written_blocks > 0: shared_parts.append(f"written={written_blocks}")
+            if hit_blocks > 0:
+                shared_parts.append(f"hit={hit_blocks}")
+            if read_blocks > 0:
+                shared_parts.append(f"read={read_blocks}")
+            if dirtied_blocks > 0:
+                shared_parts.append(f"dirtied={dirtied_blocks}")
+            if written_blocks > 0:
+                shared_parts.append(f"written={written_blocks}")
             buf_parts.append(f"shared {' '.join(shared_parts)}")
         if temp_read > 0 or temp_written > 0:
             temp_parts = []
-            if temp_read > 0: temp_parts.append(f"read={temp_read}")
-            if temp_written > 0: temp_parts.append(f"written={temp_written}")
+            if temp_read > 0:
+                temp_parts.append(f"read={temp_read}")
+            if temp_written > 0:
+                temp_parts.append(f"written={temp_written}")
             buf_parts.append(f"temp {' '.join(temp_parts)}")
 
         if buf_parts:
@@ -458,6 +512,7 @@ class PGPlanAnalyzer:
         line_exec_map: dict[int, int] = {}
 
         if root_plan:
+
             def collect_node_lines(node: dict[str, Any]):
                 raw_idx = node.get("_raw_line_idx")
                 line_num = node.get("_line_number")
@@ -475,25 +530,69 @@ class PGPlanAnalyzer:
                 stripped = line.lstrip()
                 if idx == 0 or stripped.startswith("->"):
                     indent = len(line) - len(stripped)
-                    nodes_info.append((idx, indent))
+                    act_match = re.search(r"actual time=(\d+\.\d+)\.\.", line)
+                    act_start = float(act_match.group(1)) if act_match else None
+                    nodes_info.append(
+                        {
+                            "idx": idx,
+                            "indent": indent,
+                            "line": line,
+                            "act_start": act_start,
+                            "children": [],
+                        }
+                    )
 
             if nodes_info:
                 tree_nodes = []
                 stack = []
-                for idx, indent in nodes_info:
-                    node_item = {"idx": idx, "children": []}
+                for item in nodes_info:
+                    indent = item["indent"]
+                    node_item = item
                     while stack and stack[-1]["indent"] >= indent:
                         stack.pop()
                     if stack:
                         stack[-1]["children"].append(node_item)
                     else:
                         tree_nodes.append(node_item)
-                    stack.append({"indent": indent, "children": node_item["children"]})
+                    stack.append(node_item)
 
                 exec_seq = [1]
 
-                def post_order_fallback(tnode):
+                def get_fallback_subtree_min_startup(tnode):
+                    m_start = tnode.get("act_start")
+                    min_val = m_start if m_start is not None else float("inf")
                     for child in tnode["children"]:
+                        c_min = get_fallback_subtree_min_startup(child)
+                        if c_min is not None and c_min < min_val:
+                            min_val = c_min
+                    return min_val if min_val != float("inf") else None
+
+                def get_ordered_fallback_children(tnode):
+                    children = tnode["children"]
+                    if not children or len(children) <= 1:
+                        return children
+
+                    is_hash_join = "Hash Join" in tnode.get("line", "")
+
+                    child_info = []
+                    for i, child in enumerate(children):
+                        min_start = get_fallback_subtree_min_startup(child)
+                        default_rank = i
+                        if is_hash_join and len(children) == 2:
+                            default_rank = 0 if i == 1 else 1
+
+                        sort_key = (
+                            min_start if min_start is not None else float("inf"),
+                            default_rank,
+                        )
+                        child_info.append((sort_key, child))
+
+                    child_info.sort(key=lambda x: x[0])
+                    return [x[1] for x in child_info]
+
+                def post_order_fallback(tnode):
+                    ordered_children = get_ordered_fallback_children(tnode)
+                    for child in ordered_children:
                         post_order_fallback(child)
                     line_exec_map[tnode["idx"]] = exec_seq[0]
                     exec_seq[0] += 1
@@ -540,25 +639,45 @@ class PGPlanAnalyzer:
 
         desc = ""
         if node_type == "Seq Scan":
-            desc = f"{rel_name} 테이블 데이터 전체 순차 스캔 (Seq Scan)" if rel_name else "테이블 데이터 전체 순차 스캔"
+            desc = (
+                f"{rel_name} 테이블 데이터 전체 순차 스캔 (Seq Scan)"
+                if rel_name
+                else "테이블 데이터 전체 순차 스캔"
+            )
             if filter_cond:
                 desc += f" [필터 조건: {filter_cond}]"
         elif node_type == "Index Scan":
-            desc = f"인덱스 '{idx_name}'을(를) 사용하여 {rel_name} 테이블 조건 검색" if rel_name and idx_name else f"인덱스 '{idx_name}' 검색"
+            desc = (
+                f"인덱스 '{idx_name}'을(를) 사용하여 {rel_name} 테이블 조건 검색"
+                if rel_name and idx_name
+                else f"인덱스 '{idx_name}' 검색"
+            )
             if index_cond:
                 desc += f" [인덱스 조건: {index_cond}]"
             if filter_cond:
                 desc += f" [추가 필터: {filter_cond}]"
         elif node_type == "Index Only Scan":
-            desc = f"인덱스 '{idx_name}'만으로 필요 커버링 데이터 직접 추출 (힙 데이터 탐색 회피)" if idx_name else "인덱스 전용 커버링 스캔"
+            desc = (
+                f"인덱스 '{idx_name}'만으로 필요 커버링 데이터 직접 추출 (힙 데이터 탐색 회피)"
+                if idx_name
+                else "인덱스 전용 커버링 스캔"
+            )
             if index_cond:
                 desc += f" [인덱스 조건: {index_cond}]"
         elif node_type == "Bitmap Index Scan":
-            desc = f"인덱스 '{idx_name}' 조건 기반 비트맵(Bitmap) 매핑 메모리 생성" if idx_name else "비트맵 인덱스 스캔 메모리 매핑"
+            desc = (
+                f"인덱스 '{idx_name}' 조건 기반 비트맵(Bitmap) 매핑 메모리 생성"
+                if idx_name
+                else "비트맵 인덱스 스캔 메모리 매핑"
+            )
             if index_cond:
                 desc += f" [인덱스 조건: {index_cond}]"
         elif node_type == "Bitmap Heap Scan":
-            desc = f"하위 비트맵 매핑을 참조하여 {rel_name} 테이블 힙 데이터 블록 효율적 스캔" if rel_name else "비트맵 힙 블록 스캔"
+            desc = (
+                f"하위 비트맵 매핑을 참조하여 {rel_name} 테이블 힙 데이터 블록 효율적 스캔"
+                if rel_name
+                else "비트맵 힙 블록 스캔"
+            )
             if filter_cond:
                 desc += f" [필터 조건: {filter_cond}]"
         elif node_type == "Hash":
@@ -615,12 +734,20 @@ class PGPlanAnalyzer:
             desc = "서브쿼리 실행 결과 집합 스캔"
         elif node_type == "CTE Scan":
             cte_name = node.get("CTE Name", "")
-            desc = f"WITH 절(CTE: '{cte_name}') 임시 테이블 스캔" if cte_name else "WITH 절(CTE) 임시 테이블 스캔"
+            desc = (
+                f"WITH 절(CTE: '{cte_name}') 임시 테이블 스캔"
+                if cte_name
+                else "WITH 절(CTE) 임시 테이블 스캔"
+            )
         elif node_type == "Foreign Scan":
             desc = "외부 데이터베이스(FDW) 테이블 탐색"
         elif node_type == "Function Scan":
             func_name = node.get("Function Name", "")
-            desc = f"PostgreSQL 함수('{func_name}') 실행 및 결과 스캔" if func_name else "함수 실행 및 결과 스캔"
+            desc = (
+                f"PostgreSQL 함수('{func_name}') 실행 및 결과 스캔"
+                if func_name
+                else "함수 실행 및 결과 스캔"
+            )
         else:
             desc = f"{node_type} 연산 수행"
 
@@ -708,6 +835,11 @@ class PGPlanAnalyzer:
 
             lines.append("")
 
+        # if nodes:
+        #     seq_list = [f"SEQ {node.get('_line_number', 0)}" for node in nodes]
+        #     lines.append("--------------------------------------------------------")
+        #     lines.append("[최종 실행 순서]")
+        #     lines.append(" → ".join(seq_list))
+        #     lines.append("========================================================")
+
         return "\n".join(lines)
-
-

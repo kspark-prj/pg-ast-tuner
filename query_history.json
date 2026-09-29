@@ -1,5 +1,9 @@
 [
     {
+        "timestamp": "2026-09-29 18:17:33",
+        "query": "SELECT d.dept_name, e.emp_name, e.salary\nFROM departments d\nJOIN employees e ON d.dept_id = e.dept_id\nWHERE d.dept_id = 10;"
+    },
+    {
         "timestamp": "2026-09-26 22:20:19",
         "query": "SELECT l.lineitem_id, u.username\nFROM test_lineitems l\nJOIN test_orders o ON l.order_id = o.order_id\nJOIN test_users u ON o.user_id = u.user_id\nWHERE l.price > 95.00;"
     },
