@@ -415,50 +415,63 @@ class AutoUpdater:
         self, req: urllib.request.Request, setup_path: str, timeout: int = 30
     ) -> tuple[bool, bool]:
         """
-        Tkinter 기반 프로그래스 바 창 다운로드
+        Tkinter 기반 프로그래스 바 창 다운로드 (Toplevel 호환 수정)
         :return: (성공 여부, 취소 클릭 여부)
         """
         try:
             import tkinter as tk
             from tkinter import ttk
 
-            root = tk.Tk()
-            root.title(f"{self.app_name} - 자동 업데이트")
-            root.geometry("420x160")
-            root.resizable(False, False)
+            # ---------------------------------------------------------
+            # 1. 기존 Tk 루트 존재 여부 확인 후 Toplevel 생성
+            # ---------------------------------------------------------
+            if tk._default_root is not None:
+                dialog = tk.Toplevel(tk._default_root)
+            else:
+                dialog = tk.Tk()
+
+            dialog.title(f"{self.app_name} - 자동 업데이트")
+
+            window_width = 420
+            window_height = 160
+            screen_w = dialog.winfo_screenwidth()
+            screen_h = dialog.winfo_screenheight()
+            x = (screen_w // 2) - (window_width // 2)
+            y = (screen_h // 2) - (window_height // 2)
+            dialog.geometry(f"{window_width}x{window_height}+{x}+{y}")
+            dialog.resizable(False, False)
+
             try:
-                root.attributes("-topmost", True)
+                dialog.attributes("-topmost", True)
             except Exception:
                 pass
-
-            root.update_idletasks()
-            width = root.winfo_width()
-            height = root.winfo_height()
-            screen_w = root.winfo_screenwidth()
-            screen_h = root.winfo_screenheight()
-            x = (screen_w // 2) - (width // 2)
-            y = (screen_h // 2) - (height // 2)
-            root.geometry(f"{width}x{height}+{x}+{y}")
 
             cancelled = [False]
 
             def on_close():
                 cancelled[0] = True
 
-            root.protocol("WM_DELETE_WINDOW", on_close)
+            dialog.protocol("WM_DELETE_WINDOW", on_close)
 
             title_label = ttk.Label(
-                root,
+                dialog,
                 text="최신 버전 설치 파일을 다운로드 중입니다...",
                 font=("Malgun Gothic", 10, "bold"),
             )
             title_label.pack(anchor="w", padx=20, pady=(15, 5))
 
+            # 프로그래스 바 (fill="x" 확장)
             progress_var = tk.DoubleVar(value=0)
-            progressbar = ttk.Progressbar(root, variable=progress_var, maximum=100, length=380)
-            progressbar.pack(padx=20, pady=5)
+            progressbar = ttk.Progressbar(
+                dialog,
+                variable=progress_var,
+                maximum=100,
+                orient="horizontal",
+                mode="determinate",
+            )
+            progressbar.pack(fill="x", padx=20, pady=5)
 
-            bottom_frame = ttk.Frame(root)
+            bottom_frame = ttk.Frame(dialog)
             bottom_frame.pack(fill="x", padx=20, pady=(5, 15))
 
             status_label = ttk.Label(
@@ -469,7 +482,8 @@ class AutoUpdater:
             cancel_btn = ttk.Button(bottom_frame, text="취소", width=8, command=on_close)
             cancel_btn.pack(side="right")
 
-            root.update()
+            dialog.update_idletasks()
+            dialog.update()
 
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -501,7 +515,7 @@ class AutoUpdater:
                             downloaded += len(chunk)
 
                             curr_time = time.time()
-                            if curr_time - last_update_time > 0.05 or not chunk:
+                            if curr_time - last_update_time > 0.03 or not chunk:
                                 last_update_time = curr_time
                                 if total_size:
                                     percent = (downloaded / total_size) * 100
@@ -515,7 +529,9 @@ class AutoUpdater:
                                     dl_mb = downloaded / (1024 * 1024)
                                     status_label.config(text=f"{dl_mb:.2f} MB 다운로드 중...")
 
-                                root.update()
+                                # 화면 강제 갱신
+                                dialog.update_idletasks()
+                                dialog.update()
 
                     if downloaded > 0:
                         progress_var.set(100)
@@ -526,7 +542,8 @@ class AutoUpdater:
                             )
                         else:
                             status_label.config(text="다운로드 완료!")
-                        root.update()
+                        dialog.update_idletasks()
+                        dialog.update()
                         time.sleep(0.3)
 
                 return True, False
@@ -546,7 +563,7 @@ class AutoUpdater:
                 return False, False
             finally:
                 try:
-                    root.destroy()
+                    dialog.destroy()
                 except Exception:
                     pass
         except Exception:

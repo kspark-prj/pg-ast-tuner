@@ -165,7 +165,7 @@ class App(ctk.CTk):
 
     def _load_step_1(self):
         self.splash.set_progress(0.25, "시스템 접속 환경 설정 로딩 중...")
-        self.title("PostgreSQL Production-Grade Performance Tuner (AST Core) v1.1.2")
+        self.title("PostgreSQL Production-Grade Performance Tuner (AST Core) v1.1.3")
         self.geometry("1150x800")
         self.db_config = ConfigManager.load_config()
 
