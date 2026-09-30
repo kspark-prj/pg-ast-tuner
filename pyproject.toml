@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pg-ast-tuner = "pg_ast_tuner:main"
+PG_explain = "pg_ast_tuner:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]

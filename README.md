@@ -8,37 +8,37 @@
 
 ## 📌 주요 핵심 기능 (Key Features)
 
-- **실제 실행 순서(Post-Order Traversal) 기반 SEQ 라인 번호 현행화**: 
-  - DB 옵티마이저의 단순 상단-하단 텍스트 줄 번호가 아닌, 쿼리 엔진의 **후위 순회(Bottom-Up Execution Order)**에 따른 실제 연산 순서(`SEQ 1`, `SEQ 2`, `SEQ 3`...)로 라인 번호를 부여합니다.
-  - 실행 계획 텍스트와 하단 튜닝 가이드 리포트의 `실행계획 위치: SEQ N [노드명]` 항목이 100% 동기화되어 직관적이고 정확한 위치 확인이 가능합니다.
+- **실제 실행 순서(Post-Order Traversal) 기반 SEQ 라인 번호 현행화**:
+    - DB 옵티마이저의 단순 상단-하단 텍스트 줄 번호가 아닌, 쿼리 엔진의 **후위 순회(Bottom-Up Execution Order)**에 따른 실제 연산 순서(`SEQ 1`, `SEQ 2`, `SEQ 3`...)로 라인 번호를 부여합니다.
+    - 실행 계획 텍스트와 하단 튜닝 가이드 리포트의 `실행계획 위치: SEQ N [노드명]` 항목이 100% 동기화되어 직관적이고 정확한 위치 확인이 가능합니다.
 
 - **실측 분석(`EXPLAIN (ANALYZE, BUFFERS)`) 통합 출력**:
-  - 리포트 상단 영역에서 단순 추정치뿐만 아니라 실제 수행 시간(`actual time`), 처리 행 수(`actual rows`), 반복 횟수(`loops`), 버퍼 히트/디스크 읽기(`Buffers: shared hit/read`) 실측치를 원스톱으로 직관 확인할 수 있습니다.
+    - 리포트 상단 영역에서 단순 추정치뿐만 아니라 실제 수행 시간(`actual time`), 처리 행 수(`actual rows`), 반복 횟수(`loops`), 버퍼 히트/디스크 읽기(`Buffers: shared hit/read`) 실측치를 원스톱으로 직관 확인할 수 있습니다.
 
 - **📊 단계별 실행 과정 분석 리포트 (실행 순서 기준) 신설**:
-  - `[데이터베이스 실제 EXPLAIN 수립 결과]`와 `[💡 지식 기반 자동 튜닝 권장 리포트]` 사이에 실행 순서(`SEQ 1` ~ `SEQ N`)별 한글 연산 해설 섹션이 추가되었습니다.
-  - 각 단계별 대상 테이블/인덱스, 수행 연산 내용, 실측 소요시간/출력행/반복횟수, 메모리/디스크 I/O 사용 실적을 쿼리 실행 흐름대로 쉽게 풀어서 설명합니다.
+    - `[데이터베이스 실제 EXPLAIN 수립 결과]`와 `[💡 지식 기반 자동 튜닝 권장 리포트]` 사이에 실행 순서(`SEQ 1` ~ `SEQ N`)별 한글 연산 해설 섹션이 추가되었습니다.
+    - 각 단계별 대상 테이블/인덱스, 수행 연산 내용, 실측 소요시간/출력행/반복횟수, 메모리/디스크 I/O 사용 실적을 쿼리 실행 흐름대로 쉽게 풀어서 설명합니다.
 
 - **🖱️ 마우스 드래그 분할 스플리터 UI (PanedWindow)**:
-  - 좌측 **SQL 입력창**과 우측 **결과 리포트 창** 사이의 중앙 구분선(Sash Width: 6px, 커서 `↔`)을 마우스로 자유롭게 드래그하여 화면 분할 너비를 실시간으로 조절할 수 있습니다.
+    - 좌측 **SQL 입력창**과 우측 **결과 리포트 창** 사이의 중앙 구분선(Sash Width: 6px, 커서 `↔`)을 마우스로 자유롭게 드래그하여 화면 분할 너비를 실시간으로 조절할 수 있습니다.
 
-- **SQL AST 분석 기반 지식 매핑**: 
-  - `sqlglot` 파서를 통해 SQL의 논리적 구조를 완전히 분해(AST)하여, 테이블 별칭(Alias) 및 조건절에 사용된 컬럼 정보를 정확히 타겟팅합니다.
+- **SQL AST 분석 기반 지식 매핑**:
+    - `sqlglot` 파서를 통해 SQL의 논리적 구조를 완전히 분해(AST)하여, 테이블 별칭(Alias) 및 조건절에 사용된 컬럼 정보를 정확히 타겟팅합니다.
 
-- **시스템 카탈로그 교차 검증**: 
-  - 단순히 쿼리문만 파싱하는 것에 그치지 않고, `pg_class`, `pg_index` 등 데이터베이스 시스템 카탈로그를 실시간 조회하여 인덱스 구성 상태 및 실제 데이터 테이블 크기(Row Count)를 고려한 정밀 휴리스틱 진단을 수행합니다.
+- **시스템 카탈로그 교차 검증**:
+    - 단순히 쿼리문만 파싱하는 것에 그치지 않고, `pg_class`, `pg_index` 등 데이터베이스 시스템 카탈로그를 실시간 조회하여 인덱스 구성 상태 및 실제 데이터 테이블 크기(Row Count)를 고려한 정밀 휴리스틱 진단을 수행합니다.
 
-- **규칙 자동 검색(Auto-Discovery) 엔진**: 
-  - 새 규칙 추가 시 `rules/` 하위에 파일만 생성하면 엔진 코드나 GUI 코드 수정 없이 동적으로 탐색되어 즉시 반영됩니다.
+- **규칙 자동 검색(Auto-Discovery) 엔진**:
+    - 새 규칙 추가 시 `rules/` 하위에 파일만 생성하면 엔진 코드나 GUI 코드 수정 없이 동적으로 탐색되어 즉시 반영됩니다.
 
-- **안전한 온디맨드(On-Demand) 트랜잭션 및 이중 락다운**: 
-  - 분석 버튼을 누르는 즉시 연결을 맺고 완료 즉시 차단하며, `Explain (Analyze)` 등으로 인한 데이터 변경 가능성을 방지하기 위해 강제 롤백(Rollback) 세션 구조를 채택했습니다. 또한, **SQL AST 분석을 활용하여 CTE(WITH 절) 내의 DML/DDL 우회 시도까지 이중으로 완전 차단**합니다.
+- **안전한 온디맨드(On-Demand) 트랜잭션 및 이중 락다운**:
+    - 분석 버튼을 누르는 즉시 연결을 맺고 완료 즉시 차단하며, `Explain (Analyze)` 등으로 인한 데이터 변경 가능성을 방지하기 위해 강제 롤백(Rollback) 세션 구조를 채택했습니다. 또한, **SQL AST 분석을 활용하여 CTE(WITH 절) 내의 DML/DDL 우회 시도까지 이중으로 완전 차단**합니다.
 
-- **정밀화된 오진(False Positive) 방지 필터링**: 
-  - 중첩 루프 조인의 매개변수화(Parameterized) 여부 확인, 대량 스캔 필터링 시 누적 유효 행(Live Rows) 대비 밀도 연산, 시스템 메타데이터 미확보 시의 예외 차단 등을 종합 적용하여 오탐과 크래시를 방지합니다.
+- **정밀화된 오진(False Positive) 방지 필터링**:
+    - 중첩 루프 조인의 매개변수화(Parameterized) 여부 확인, 대량 스캔 필터링 시 누적 유효 행(Live Rows) 대비 밀도 연산, 시스템 메타데이터 미확보 시의 예외 차단 등을 종합 적용하여 오탐과 크래시를 방지합니다.
 
-- **스마트 주석 처리(Comment Stripper)**: 
-  - 한 줄 주석(`--`) 및 인라인 블록 주석(`/* ... */`)이 섞여 있는 대용량 실무 쿼리도 에러 없이 완벽하게 정제하여 처리합니다.
+- **스마트 주석 처리(Comment Stripper)**:
+    - 한 줄 주석(`--`) 및 인라인 블록 주석(`/* ... */`)이 섞여 있는 대용량 실무 쿼리도 에러 없이 완벽하게 정제하여 처리합니다.
 
 ---
 
@@ -78,17 +78,17 @@ project/
 
 ### 1. 스캔 진단 규칙 (SCAN Category)
 
-| 규칙 ID         | 규칙 클래스명                 | 진단 대상 노드              | 진단 및 권장 내용                                                                                                                 |
-| :-------------- | :---------------------------- | :-------------------------- | :-------------------------------------------------------------------------------------------------------------------------------- |
-| `RULE_SCAN_001` | `SeqScanRule`                 | Seq Scan                    | 풀 스캔 시 인덱스 누락, 소형 테이블 여부, OR 조건, LIKE 전방 와일드카드, 함수 가공(Index Suppression) 여부 종합 진단              |
-| `RULE_SCAN_002` | `IndexScanRule`               | Index Scan                  | 인덱스 스캔 사용 시 인덱스 적정성 진단 (과도한 인덱스 조회 등)                                                                    |
-| `RULE_SCAN_003` | `BitmapHeapScanLossyRule`     | Bitmap Heap Scan            | `work_mem` 부족으로 인한 비트맵 Lossy 블록 전환 및 Recheck 힙 페이지 접근 진단                                                    |
-| `RULE_SCAN_004` | `IndexOnlyScanHeapFetchRule`  | Index Only Scan             | Visibility Map 미갱신으로 인한 과도한 테이블 힙 접근(Heap Fetches) 진단                                                           |
-| `RULE_SCAN_005` | `HighFilterRemovalRatioRule`  | Seq Scan, Index Scan 등     | 스캔 후 Filter 조건으로 버려지는 행(Rows Removed) 비율이 높아 발생하는 I/O 낭비 진단 (90% 이상 버려질 시)                         |
-| `RULE_SCAN_006` | `SubqueryScanRepetitionRule`  | Subquery Scan               | 상관 서브쿼리나 미튜닝 스칼라 서브쿼리가 상위 루프만큼 반복 실행(N+1 스캔 병목)되는지 진단                                        |
-| `RULE_SCAN_007` | `IndexFilterInefficiencyRule` | Index Scan, Index Only Scan | Index Cond이 아닌 Index Filter로 과도한 행이 스캔되는 비효율 진단 (선행 컬럼 Prefix Match 평가 포함)                              |
-| `RULE_SCAN_008` | `StaleVisibilityMapRule`      | Seq Scan, Bitmap Heap Scan  | 데드 튜플(Dead Tuples) 및 테이블 블로트(Bloat)로 인한 불필요한 I/O 대량 발생 진단 (선택도 필터링을 반영한 Live 행 밀도 연산 적용) |
-| `RULE_SCAN_009` | `BitmapMultiIndexInefficiencyRule` | BitmapAnd, BitmapOr | 복수 단일 컬럼 인덱스의 비트맵 결합 연산 오버헤드 진단 및 복합 인덱스 신설 권장                                                   |
+| 규칙 ID         | 규칙 클래스명                      | 진단 대상 노드              | 진단 및 권장 내용                                                                                                                 |
+| :-------------- | :--------------------------------- | :-------------------------- | :-------------------------------------------------------------------------------------------------------------------------------- |
+| `RULE_SCAN_001` | `SeqScanRule`                      | Seq Scan                    | 풀 스캔 시 인덱스 누락, 소형 테이블 여부, OR 조건, LIKE 전방 와일드카드, 함수 가공(Index Suppression) 여부 종합 진단              |
+| `RULE_SCAN_002` | `IndexScanRule`                    | Index Scan                  | 인덱스 스캔 사용 시 인덱스 적정성 진단 (과도한 인덱스 조회 등)                                                                    |
+| `RULE_SCAN_003` | `BitmapHeapScanLossyRule`          | Bitmap Heap Scan            | `work_mem` 부족으로 인한 비트맵 Lossy 블록 전환 및 Recheck 힙 페이지 접근 진단                                                    |
+| `RULE_SCAN_004` | `IndexOnlyScanHeapFetchRule`       | Index Only Scan             | Visibility Map 미갱신으로 인한 과도한 테이블 힙 접근(Heap Fetches) 진단                                                           |
+| `RULE_SCAN_005` | `HighFilterRemovalRatioRule`       | Seq Scan, Index Scan 등     | 스캔 후 Filter 조건으로 버려지는 행(Rows Removed) 비율이 높아 발생하는 I/O 낭비 진단 (90% 이상 버려질 시)                         |
+| `RULE_SCAN_006` | `SubqueryScanRepetitionRule`       | Subquery Scan               | 상관 서브쿼리나 미튜닝 스칼라 서브쿼리가 상위 루프만큼 반복 실행(N+1 스캔 병목)되는지 진단                                        |
+| `RULE_SCAN_007` | `IndexFilterInefficiencyRule`      | Index Scan, Index Only Scan | Index Cond이 아닌 Index Filter로 과도한 행이 스캔되는 비효율 진단 (선행 컬럼 Prefix Match 평가 포함)                              |
+| `RULE_SCAN_008` | `StaleVisibilityMapRule`           | Seq Scan, Bitmap Heap Scan  | 데드 튜플(Dead Tuples) 및 테이블 블로트(Bloat)로 인한 불필요한 I/O 대량 발생 진단 (선택도 필터링을 반영한 Live 행 밀도 연산 적용) |
+| `RULE_SCAN_009` | `BitmapMultiIndexInefficiencyRule` | BitmapAnd, BitmapOr         | 복수 단일 컬럼 인덱스의 비트맵 결합 연산 오버헤드 진단 및 복합 인덱스 신설 권장                                                   |
 
 ### 2. 조인 진단 규칙 (JOIN Category)
 
@@ -107,24 +107,24 @@ project/
 
 ### 3. 통계 및 리소스 진단 규칙 (STATISTICS Category)
 
-| 규칙 ID         | 규칙 클래스명              | 진단 대상 노드       | 진단 및 권장 내용                                                                                                                |
-| :-------------- | :------------------------- | :------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
-| `RULE_STAT_001` | `TempFileRule`             | 전체 (\*)            | 정렬, 해시, 그룹화 연산 중 `work_mem` 부족으로 임시 파일 쓰기(Temp Written Blocks)가 발생한 디스크 I/O 병목 진단                 |
-| `RULE_STAT_002` | `ParallelWorkersRule`      | 전체 (\*)            | 병렬 처리 및 Gather 노드 수행 시 너무 많은 워커(4개 이상)가 계획되어 가용 자원을 빠르게 소모하는 오버헤드 진단                   |
-| `RULE_STAT_003` | `SortRule`                 | Sort                 | 정렬 연산 시 디스크 정렬(External Sort)이 유발되거나 LIMIT 조건 하에서 정렬 인덱스 미적용으로 대규모 Quicksort가 유발되는지 진단 |
-| `RULE_STAT_004` | `DiskHashAggRule`          | Aggregate            | GROUP BY/집계 연산 처리 중 메모리가 부족하여 디스크 기반 해시 집계(Disk Used > 0)가 발생했는지 감지                              |
-| `RULE_STAT_005` | `ParallelWorkerSkewRule`   | Gather, Gather Merge | 병렬 워커 간 데이터 처리량 차이가 5배 이상으로 한쪽 워커에 편중되어 병목이 발생하는지 감지                                       |
-| `RULE_STAT_006` | `JITOverheadRule`          | 전체 (\*)            | JIT(Just-In-Time) 컴파일 작업에 총 100ms 이상의 과도한 시간이 소요되는 컴파일 오버헤드 진단                                      |
-| `RULE_STAT_007` | `IncrementalSortSpillRule` | Incremental Sort     | 증분 정렬 수행 중 부분 정렬 메모리 한계를 초과하여 디스크 스필(Sort Space Used)이 일어나는지 진단                                |
-| `RULE_STAT_008` | `WindowAggSortOverheadRule`| WindowAgg            | WindowAgg 절 처리를 위해 하위에서 명시적 메모리/디스크 정렬이 강제되는 비효율 진단                                               |
+| 규칙 ID         | 규칙 클래스명               | 진단 대상 노드       | 진단 및 권장 내용                                                                                                                |
+| :-------------- | :-------------------------- | :------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
+| `RULE_STAT_001` | `TempFileRule`              | 전체 (\*)            | 정렬, 해시, 그룹화 연산 중 `work_mem` 부족으로 임시 파일 쓰기(Temp Written Blocks)가 발생한 디스크 I/O 병목 진단                 |
+| `RULE_STAT_002` | `ParallelWorkersRule`       | 전체 (\*)            | 병렬 처리 및 Gather 노드 수행 시 너무 많은 워커(4개 이상)가 계획되어 가용 자원을 빠르게 소모하는 오버헤드 진단                   |
+| `RULE_STAT_003` | `SortRule`                  | Sort                 | 정렬 연산 시 디스크 정렬(External Sort)이 유발되거나 LIMIT 조건 하에서 정렬 인덱스 미적용으로 대규모 Quicksort가 유발되는지 진단 |
+| `RULE_STAT_004` | `DiskHashAggRule`           | Aggregate            | GROUP BY/집계 연산 처리 중 메모리가 부족하여 디스크 기반 해시 집계(Disk Used > 0)가 발생했는지 감지                              |
+| `RULE_STAT_005` | `ParallelWorkerSkewRule`    | Gather, Gather Merge | 병렬 워커 간 데이터 처리량 차이가 5배 이상으로 한쪽 워커에 편중되어 병목이 발생하는지 감지                                       |
+| `RULE_STAT_006` | `JITOverheadRule`           | 전체 (\*)            | JIT(Just-In-Time) 컴파일 작업에 총 100ms 이상의 과도한 시간이 소요되는 컴파일 오버헤드 진단                                      |
+| `RULE_STAT_007` | `IncrementalSortSpillRule`  | Incremental Sort     | 증분 정렬 수행 중 부분 정렬 메모리 한계를 초과하여 디스크 스필(Sort Space Used)이 일어나는지 진단                                |
+| `RULE_STAT_008` | `WindowAggSortOverheadRule` | WindowAgg            | WindowAgg 절 처리를 위해 하위에서 명시적 메모리/디스크 정렬이 강제되는 비효율 진단                                               |
 
 ### 4. 메모리 진단 규칙 (MEMORY Category)
 
-| 규칙 ID        | 규칙 클래스명              | 진단 대상 노드        | 진단 및 권장 내용                                                               |
-| :------------- | :------------------------- | :-------------------- | :------------------------------------------------------------------------------ |
-| `RULE_MEM_001` | `ExcessiveWorkMemRule`     | Sort, Hash, Aggregate | 단일 연산 노드에서 지나치게 높은 `work_mem`을 할당하여 사용 중인지 진단         |
-| `RULE_MEM_002` | `BufferCacheMissRatioRule` | 전체 (\*)             | Shared Buffers 메모리 히트율이 낮아 실제 디스크 Read I/O 병목이 발생하는지 진단 |
-| `RULE_MEM_003` | `MaterializeSpillRule`     | Materialize           | Materialize 노드의 캐시 크기가 메모리를 초과하여 디스크로 스필되는 오버헤드 진단|
+| 규칙 ID        | 규칙 클래스명              | 진단 대상 노드        | 진단 및 권장 내용                                                                |
+| :------------- | :------------------------- | :-------------------- | :------------------------------------------------------------------------------- |
+| `RULE_MEM_001` | `ExcessiveWorkMemRule`     | Sort, Hash, Aggregate | 단일 연산 노드에서 지나치게 높은 `work_mem`을 할당하여 사용 중인지 진단          |
+| `RULE_MEM_002` | `BufferCacheMissRatioRule` | 전체 (\*)             | Shared Buffers 메모리 히트율이 낮아 실제 디스크 Read I/O 병목이 발생하는지 진단  |
+| `RULE_MEM_003` | `MaterializeSpillRule`     | Materialize           | Materialize 노드의 캐시 크기가 메모리를 초과하여 디스크로 스필되는 오버헤드 진단 |
 
 ### 5. 구조적 진단 규칙 (STRUCTURAL Category)
 
@@ -172,14 +172,17 @@ project/
 ```
 
 #### 1단계. SQL AST 문법 트리 분석 (`sqlglot` 엔진)
+
 - **목적**: 쿼리에서 "필터링(`WHERE`)이나 정렬(`ORDER BY`)에 실제로 사용된 테이블과 컬럼"이 무엇인지 식별합니다.
 - **이유**: 단순 정규식이나 문자열 검색은 테이블 별칭(Alias, 예: `orders o` -> `o.user_id`)이나 복잡한 서브쿼리 내의 컬럼을 제대로 짚어내지 못합니다. AST 파서는 이를 트리 구조로 완벽히 쪼개어 `orders` 테이블의 `user_id` 컬럼이 조건절에 쓰였음을 명확히 알아냅니다.
 
 #### 2단계. PostgreSQL 시스템 카탈로그 조회 (`PGMetadataProvider`)
+
 - **목적**: 해당 테이블에 **"실제 어떤 인덱스들이 만들어져 있는지"**, 그리고 **"테이블 크기(Row Count)가 얼마나 큰지"** 확인합니다.
 - **이유**: 소량의 데이터(예: 10건)가 들어있는 테이블은 인덱스가 있어도 옵티마이저가 풀 스캔(`Seq Scan`)을 해버립니다. 따라서 카탈로그를 조회해 실제 테이블 규모와 인덱스 컬럼 목록(`user_id`가 인덱스 첫 열로 지정되어 있는지 등)을 파악합니다.
 
 #### 3단계. EXPLAIN ANALYZE 실행 계획 추적 (`PGPlanAnalyzer`)
+
 - **목적**: PostgreSQL 옵티마이저가 실제로 수립한 "물리적 실행 계획"과 실제 수행시간/버퍼 실측치를 받아옵니다.
 - **이유**: 아무리 쿼리를 잘 짜고 인덱스가 있어도 옵티마이저가 엉뚱한 길을 선택할 수 있기 때문입니다. 실측 지표(`actual time`, `buffers`)와 실제 수행된 병목 노드(`Seq Scan`, `Disk Sort` 등)가 찍혔는지를 최종 확인하여 정확한 튜닝 처방을 생성합니다.
 
@@ -287,7 +290,7 @@ python -m PyInstaller main.spec
 Spec 파일 없이 명령어로 직접 빌드하는 경우, `psycopg` 모듈의 동적 바인딩 파일들을 수집하도록 `--collect-all` 옵션을 반드시 포함해야 합니다.
 
 ```bash
-uv run python -m PyInstaller --clean --noconfirm -w -D --icon=main.ico --add-data "splash.png;." --collect-all psycopg --collect-all sqlglot --collect-all rules --exclude-module pytest --exclude-module matplotlib --exclude-module tkinter.test --exclude-module PyQt5 --exclude-module PyQt6 --exclude-module PySide2 --exclude-module PySide6 --exclude-module scipy --exclude-module pandas --exclude-module IPython --exclude-module notebook --exclude-module tornado main.py
+uv run python -m PyInstaller --clean --noconfirm -w -D --name PG_explain --icon=main.ico --add-data "splash.png;." --collect-all psycopg --collect-all sqlglot --collect-all rules --exclude-module pytest --exclude-module matplotlib --exclude-module tkinter.test --exclude-module PyQt5 --exclude-module PyQt6 --exclude-module PySide2 --exclude-module PySide6 --exclude-module scipy --exclude-module pandas --exclude-module IPython --exclude-module notebook --exclude-module tornado main.py
 ```
 
 ---
@@ -296,12 +299,11 @@ uv run python -m PyInstaller --clean --noconfirm -w -D --icon=main.ico --add-dat
 
 본 프로젝트는 실무 운영 데이터베이스(Production DB) 환경 적용에 대한 종합 정합성 검토 및 최적화 보완 작업을 거쳤습니다.
 
-| 검토 항목 | 기존 상태 | 반영 및 최적화 내용 | 실무 적용 효과 |
-| :--- | :--- | :--- | :--- |
-| **보안 & DSN** | DSN 문자열 포매팅 | `psycopg.connect(**conn_params)` 키워드 인자 분리 전달 | 특수문자/공백 포함 접속 정보 파싱 안정성 확보 |
-| **트랜잭션** | `SET SESSION CHARACTERISTICS` | `SET TRANSACTION READ ONLY;` 명시적 지정 | 활성 트랜잭션의 확실한 읽기 전용 모드 확정 |
-| **성능 최적화** | EXPLAIN ANALYZE 2회 수행 | **1회 (FORMAT JSON) 수행** 후 JSON-to-Text 자체 변환 | DB CPU/IO 부하 및 대기 시간 **50% 감축** |
-| **자원 관리** | 소켓 해제 OS 위임 | 창 종료 시 `server_socket.close()` 명시적 cleanup | 빠른 앱 재실행 시 포트 점유 충돌 예방 |
-| **진단 안전성** | psycopg diagnostics 직접 접근 | `getattr()` 및 안전한 `None` 검사 적용 | 2차 AttributeError 방지 및 예외 처리 안정화 |
-| **테스트 검증** | - | 17개 전 통합/단위 테스트 Suite Pass (1.02s) | 기능 및 인터페이스 정합성 100% 검증 완료 |
-
+| 검토 항목       | 기존 상태                     | 반영 및 최적화 내용                                    | 실무 적용 효과                                |
+| :-------------- | :---------------------------- | :----------------------------------------------------- | :-------------------------------------------- |
+| **보안 & DSN**  | DSN 문자열 포매팅             | `psycopg.connect(**conn_params)` 키워드 인자 분리 전달 | 특수문자/공백 포함 접속 정보 파싱 안정성 확보 |
+| **트랜잭션**    | `SET SESSION CHARACTERISTICS` | `SET TRANSACTION READ ONLY;` 명시적 지정               | 활성 트랜잭션의 확실한 읽기 전용 모드 확정    |
+| **성능 최적화** | EXPLAIN ANALYZE 2회 수행      | **1회 (FORMAT JSON) 수행** 후 JSON-to-Text 자체 변환   | DB CPU/IO 부하 및 대기 시간 **50% 감축**      |
+| **자원 관리**   | 소켓 해제 OS 위임             | 창 종료 시 `server_socket.close()` 명시적 cleanup      | 빠른 앱 재실행 시 포트 점유 충돌 예방         |
+| **진단 안전성** | psycopg diagnostics 직접 접근 | `getattr()` 및 안전한 `None` 검사 적용                 | 2차 AttributeError 방지 및 예외 처리 안정화   |
+| **테스트 검증** | -                             | 17개 전 통합/단위 테스트 Suite Pass (1.02s)            | 기능 및 인터페이스 정합성 100% 검증 완료      |

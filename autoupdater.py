@@ -97,7 +97,7 @@ class AutoUpdater:
                         QMessageBox.Yes,
                     )
                     return reply == QMessageBox.Yes
-                except Exception:  # noqa: S110
+                except Exception:
                     pass
 
         # 2. Tkinter 감지
@@ -106,7 +106,7 @@ class AutoUpdater:
                 import tkinter.messagebox
 
                 return bool(tkinter.messagebox.askyesno(title, message))
-            except Exception:  # noqa: S110
+            except Exception:
                 pass
 
         # 3. Windows Native API (ctypes) Fallback - 추가 설치 모듈 없을 때
@@ -116,21 +116,67 @@ class AutoUpdater:
                 # IDYES = 6
                 res = ctypes.windll.user32.MessageBoxW(0, message, title, 0x40024)
                 return res == 6
-            except Exception:  # noqa: S110
+            except Exception:
                 pass
 
         return False
+
+    def _show_info_dialog(self, title: str, message: str) -> None:
+        """
+        사용자에게 정보 안내를 제공하는 GUI OK 메시지 박스
+        PyQt / PySide / Tkinter / Windows Native API (ctypes) 순서로 자동 감지
+        """
+        # 1. Active Qt Application (PyQt5, PyQt6, PySide2, PySide6) 자동 감지
+        for qt_mod in [
+            "PyQt5.QtWidgets",
+            "PySide6.QtWidgets",
+            "PyQt6.QtWidgets",
+            "PySide2.QtWidgets",
+        ]:
+            if qt_mod in sys.modules:
+                try:
+                    mod = sys.modules[qt_mod]
+                    QMessageBox = mod.QMessageBox
+                    QMessageBox.information(
+                        None,
+                        title,
+                        message,
+                        QMessageBox.Ok,
+                    )
+                    return
+                except Exception:
+                    pass
+
+        # 2. Tkinter 감지
+        if "tkinter" in sys.modules or "tkinter.messagebox" in sys.modules:
+            try:
+                import tkinter.messagebox
+
+                tkinter.messagebox.showinfo(title, message)
+                return
+            except Exception:
+                pass
+
+        # 3. Windows Native API (ctypes) Fallback - 추가 설치 모듈 없을 때
+        if sys.platform == "win32":
+            try:
+                # MB_OK(0x00) | MB_ICONINFORMATION(0x40) | MB_TOPMOST(0x40000) = 0x40040
+                ctypes.windll.user32.MessageBoxW(0, message, title, 0x40040)
+                return
+            except Exception:
+                pass
 
     def check_for_update(self, show_progress: bool | None = None) -> bool:
         """
         GitHub Pages에서 최신 버전 정보(version.json)를 검사하고, 업데이트 존재 시 사용자 확인 후 진행.
         api.github.com 대신 정적 GitHub Pages URL을 사용하여 GitHub API Rate Limit(시간당 60회 제한)을 회피함.
-        오프라인, 네트워크 타임아웃, API 에러 발생 시 콘솔/GUI 에러 일절 없이 조용히 종료.
+        최신 버전과 현재 버전이 같거나 예외 발생 시 "최신 버전입니다." 알림을 표시함.
         :param show_progress: 다운로드 프로그래스 바 GUI 창 표시 여부 (미입력 시 생성자 기본값 사용)
         """
         try:
             # 1. 오프라인 사전 확인 (소켓 통신)
             if not self._check_internet():
+                self._show_info_dialog("자동 업데이트 알림", "최신 버전입니다.")
                 return False
 
             # 2. GitHub Pages 버전 정보(JSON) 호출 (CDN 캐시 방지 타임스탬프 파라미터 및 헤더 적용)
@@ -149,15 +195,18 @@ class AutoUpdater:
 
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 if resp.status != 200:
+                    self._show_info_dialog("자동 업데이트 알림", "최신 버전입니다.")
                     return False
                 data = json.loads(resp.read().decode("utf-8"))
 
             # 3. version.json 규격에서 해당 앱(app_name) 정보 추출
             if not isinstance(data, dict) or self.app_name not in data:
+                self._show_info_dialog("자동 업데이트 알림", "최신 버전입니다.")
                 return False
 
             app_info = data[self.app_name]
             if not isinstance(app_info, dict):
+                self._show_info_dialog("자동 업데이트 알림", "최신 버전입니다.")
                 return False
 
             # 4. 규격 필수/선택 항목(version, download_url, file_name, sha256/sha512) 추출
@@ -183,6 +232,7 @@ class AutoUpdater:
                 hash_algorithm = "sha512" if len(expected_hash) == 128 else "sha256"
 
             if not latest_version or not download_url:
+                self._show_info_dialog("자동 업데이트 알림", "최신 버전입니다.")
                 return False
 
             if not file_name:
@@ -195,6 +245,7 @@ class AutoUpdater:
             curr_ver_tuple = self._parse_version(self.current_version)
 
             if latest_ver_tuple <= curr_ver_tuple:
+                self._show_info_dialog("자동 업데이트 알림", "최신 버전입니다.")
                 return False
 
             # 6. 사용자 승인 대화상자 표시
@@ -213,7 +264,8 @@ class AutoUpdater:
                 return True
 
         except Exception:
-            # 네트워크 오류, 타임아웃, JSON 파싱 실패 등 모든 예외 완전 무소음 처리
+            # 네트워크 오류, 타임아웃, JSON 파싱 실패 등 모든 예외 발생 시 "최신 버전입니다." 알림 표시
+            self._show_info_dialog("자동 업데이트 알림", "최신 버전입니다.")
             return False
 
         return False
@@ -257,7 +309,7 @@ class AutoUpdater:
             if os.path.exists(setup_path):
                 try:
                     os.remove(setup_path)
-                except Exception:  # noqa: S110
+                except Exception:
                     pass
             return False
 
@@ -349,12 +401,12 @@ class AutoUpdater:
                             if os.path.exists(setup_path):
                                 try:
                                     os.remove(setup_path)
-                                except Exception:  # noqa: S110
+                                except Exception:
                                     pass
                             return False, True
 
                         return True, False
-                except Exception:  # noqa: S110
+                except Exception:
                     pass
 
         return False, False
@@ -376,7 +428,7 @@ class AutoUpdater:
             root.resizable(False, False)
             try:
                 root.attributes("-topmost", True)
-            except Exception:  # noqa: S110
+            except Exception:
                 pass
 
             root.update_idletasks()
@@ -482,20 +534,20 @@ class AutoUpdater:
                 if os.path.exists(setup_path):
                     try:
                         os.remove(setup_path)
-                    except Exception:  # noqa: S110
+                    except Exception:
                         pass
                 return False, True
             except Exception:
                 if os.path.exists(setup_path):
                     try:
                         os.remove(setup_path)
-                    except Exception:  # noqa: S110
+                    except Exception:
                         pass
                 return False, False
             finally:
                 try:
                     root.destroy()
-                except Exception:  # noqa: S110
+                except Exception:
                     pass
         except Exception:
             return False, False
@@ -547,7 +599,7 @@ class AutoUpdater:
                 if os.path.exists(setup_path):
                     try:
                         os.remove(setup_path)
-                    except Exception:  # noqa: S110
+                    except Exception:
                         pass
                 return
 
@@ -577,6 +629,6 @@ class AutoUpdater:
             # 5. 현재 메인 파이썬 프로세스 즉시 종료
             sys.exit(0)
 
-        except Exception:  # noqa: S110
+        except Exception:
             # 다운로드/실행 실패 시 조용히 넘어가서 기존 프로그램 수행 보장
             pass
