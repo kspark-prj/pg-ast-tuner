@@ -494,7 +494,7 @@ class App(ctk.CTk):
     def check_update(self):
         updater = AutoUpdater(
             app_name="pge",  # 모노레포 내 앱 식별자
-            current_version="1.1.3",  # 현재 프로그램 버전
+            current_version="1.2.0",  # 현재 프로그램 버전
             github_repo="kspark-prj/python-gui-monorepo",  # GitHub 저장소 (owner/repo)
         )
         updater.check_for_update()
@@ -749,7 +749,9 @@ class App(ctk.CTk):
             "root_plan": root_plan,
             "explain_data": explain_data,
             "query": query,
-            "formatted_tree": PGPlanAnalyzer.format_explain_with_line_numbers(raw_explain, root_plan),
+            "formatted_tree": PGPlanAnalyzer.format_explain_with_line_numbers(
+                raw_explain, root_plan
+            ),
         }
 
         # [1] PLAN SUMMARY
@@ -866,7 +868,11 @@ class App(ctk.CTk):
     def _apply_syntax_highlighting(self):
         textbox = self.txt_result
 
-        textbox.tag_config("header_tag", foreground="#61AFEF", font=ctk.CTkFont(family="Consolas", size=12, weight="bold"))
+        textbox.tag_config(
+            "header_tag",
+            foreground="#61AFEF",
+            font=ctk.CTkFont(family="Consolas", size=12, weight="bold"),
+        )
         textbox.tag_config("critical_tag", foreground=self.color_pink)
         textbox.tag_config("high_tag", foreground="#FF9644")
         textbox.tag_config("warning_tag", foreground=self.color_gold)
