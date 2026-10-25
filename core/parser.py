@@ -354,15 +354,17 @@ class PGPlanAnalyzer:
             node_type = node.get("Node Type", "")
             child_info = []
             for i, child in enumerate(plans):
-                min_startup = get_subtree_min_startup(child)
+                # PostgreSQL Executor 파이프라인 규칙:
+                # Hash Join의 경우 Build Side(Inner Plan, 보통 Node Type == 'Hash' 또는 i == 1)가
+                # 메모리에 100% 해시 테이블을 완성해야만 Probe Side(Outer Plan)를 실행할 수 있음
                 default_rank = i
-                if node_type == "Hash Join" and len(plans) == 2:
-                    default_rank = 0 if i == 1 else 1
+                if node_type == "Hash Join":
+                    if child.get("Node Type") == "Hash" or i == 1:
+                        default_rank = 0
+                    else:
+                        default_rank = 1
 
-                sort_key = (
-                    min_startup if min_startup is not None else float("inf"),
-                    default_rank,
-                )
+                sort_key = (default_rank, i)
                 child_info.append((sort_key, child))
 
             child_info.sort(key=lambda x: x[0])
@@ -576,15 +578,15 @@ class PGPlanAnalyzer:
 
                     child_info = []
                     for i, child in enumerate(children):
-                        min_start = get_fallback_subtree_min_startup(child)
                         default_rank = i
-                        if is_hash_join and len(children) == 2:
-                            default_rank = 0 if i == 1 else 1
+                        if is_hash_join:
+                            child_line = child.get("line", "")
+                            if "Hash" in child_line or i == 1:
+                                default_rank = 0
+                            else:
+                                default_rank = 1
 
-                        sort_key = (
-                            min_start if min_start is not None else float("inf"),
-                            default_rank,
-                        )
+                        sort_key = (default_rank, i)
                         child_info.append((sort_key, child))
 
                     child_info.sort(key=lambda x: x[0])
@@ -615,10 +617,10 @@ class PGPlanAnalyzer:
         for idx, line in enumerate(lines):
             exec_num = full_line_exec[idx]
             if exec_num is not None:
-                line_num_str = f"SEQ {exec_num:>{max_digits}}"
+                line_num_str = f"[{exec_num:0{max_digits}d}]"
                 formatted_lines.append(f"{line_num_str} | {line}")
             else:
-                prefix_spaces = " " * (len(f"SEQ {1:>{max_digits}}"))
+                prefix_spaces = " " * (max_digits + 2)
                 formatted_lines.append(f"{prefix_spaces} | {line}")
 
         return "\n".join(formatted_lines)
@@ -705,8 +707,7 @@ class PGPlanAnalyzer:
             if sort_keys:
                 desc += f" [정렬 키: {', '.join(sort_keys)}]"
         elif node_type == "Aggregate":
-            strat_str = f" ({strategy})" if strategy else ""
-            desc = f"그룹화 및 데이터 집계 연산(COUNT, SUM, AVG 등) 수행{strat_str}"
+            desc = "그룹화 및 데이터 집계 연산(COUNT, SUM, AVG 등) 수행"
             if group_keys:
                 desc += f" [그룹 키: {', '.join(group_keys)}]"
         elif node_type == "WindowAgg":
@@ -774,8 +775,14 @@ class PGPlanAnalyzer:
 
         lines = []
         lines.append("========================================================")
-        lines.append("📊 [단계별 실행 과정 분석 리포트 (실행 순서 기준)]")
+        lines.append("📊 [단계별 실행 의존성 분석 리포트 (파이프라인 준비 순서)]")
         lines.append("========================================================")
+        lines.append(
+            "※ 안내: 이 번호는 상위 연산 수행에 필요한 선행 준비 순서(Dependency Order)이며, 실제 CPU 실행 순서가 아닙니다."
+        )
+        lines.append(
+            "         실제 엔진은 상위 노드의 Pull 요청에 따라 노드 간에 스트리밍 방식으로 맞물려 동작합니다.\n"
+        )
 
         for node in nodes:
             seq = node.get("_line_number", 0)
@@ -793,7 +800,7 @@ class PGPlanAnalyzer:
                 target_info.append(f"인덱스: {idx_name}")
 
             target_str = f" ({', '.join(target_info)})" if target_info else ""
-            lines.append(f"• [SEQ {seq}] {node_type}{target_str}")
+            lines.append(f"• [{seq}] {node_type}{target_str}")
 
             op_desc = PGPlanAnalyzer._get_node_operation_desc(node)
             lines.append(f"  - 수행 연산: {op_desc}")
@@ -841,5 +848,425 @@ class PGPlanAnalyzer:
         #     lines.append("[최종 실행 순서]")
         #     lines.append(" → ".join(seq_list))
         #     lines.append("========================================================")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def generate_plan_summary(
+        root_plan: dict[str, Any], plan_data: list[dict[str, Any]] | None = None
+    ) -> str:
+        if not root_plan:
+            return ""
+
+        exec_time = None
+        plan_time = None
+        if plan_data and isinstance(plan_data, list) and len(plan_data) > 0:
+            exec_time = plan_data[0].get("Execution Time")
+            plan_time = plan_data[0].get("Planning Time")
+        if exec_time is None:
+            exec_time = root_plan.get("Actual Total Time")
+
+        nodes = []
+
+        def collect(n):
+            nodes.append(n)
+            for sub in n.get("Plans", []):
+                collect(sub)
+
+        collect(root_plan)
+
+        node_types = sorted(list({n.get("Node Type", "") for n in nodes if n.get("Node Type")}))
+
+        lines = [
+            "=======================================================",
+            "[1] PLAN SUMMARY",
+            "=======================================================",
+        ]
+        if exec_time is not None:
+            lines.append(f"• Total Execution Time : {exec_time:.3f} ms")
+        if plan_time is not None:
+            lines.append(f"• Planning Time        : {plan_time:.3f} ms")
+        lines.append(f"• Root Node Type       : {root_plan.get('Node Type', 'Unknown')}")
+        lines.append(f"• Total Plan Nodes     : {len(nodes)}개")
+        lines.append(
+            f"• Major Operations     : {', '.join(node_types[:8])}"
+            + ("..." if len(node_types) > 8 else "")
+        )
+        return "\n".join(lines)
+
+    @staticmethod
+    def generate_cardinality_analysis(root_plan: dict[str, Any]) -> str:
+        if not root_plan:
+            return ""
+        nodes = []
+
+        def collect(n):
+            nodes.append(n)
+            for sub in n.get("Plans", []):
+                collect(sub)
+
+        collect(root_plan)
+
+        lines = [
+            "=======================================================",
+            "[4] CARDINALITY ANALYSIS",
+            "=======================================================",
+        ]
+
+        mismatches = []
+        for n in nodes:
+            est = n.get("Plan Rows")
+            act_r = n.get("Actual Rows")
+            act_l = n.get("Actual Loops", 1)
+            if est is not None and act_r is not None:
+                total_act = act_r * act_l
+                ratio = max(est, total_act) / max(min(est, total_act), 1)
+                seq = n.get("_line_number", 0)
+                ntype = n.get("Node Type", "Node")
+                rel = n.get("Relation Name", "")
+                target_str = f" ({rel})" if rel else ""
+                if ratio >= 2.0:
+                    status = (
+                        "추정 오차 관찰 (필요 시 ANALYZE 검토)" if ratio >= 10 else "경미한 오차"
+                    )
+                    mismatches.append(
+                        f"• [{seq}] {ntype}{target_str}: 추정 {est:,}행 vs 실측 {total_act:,}행 (오차 {ratio:.1f}배 - {status})"
+                    )
+
+        if mismatches:
+            lines.extend(mismatches)
+            lines.append(
+                "  (※ 주의: 카디널리티 오차가 크더라도 실제 실행시간이 극히 짧다면 즉각적인 성능 병목은 아닐 수 있습니다.)"
+            )
+        else:
+            lines.append(
+                "• 전체 노드에서 유의미한 카디널리티 추정 오차(2배 이상)가 감지되지 않았습니다."
+            )
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def generate_buffer_io_analysis(root_plan: dict[str, Any]) -> str:
+        if not root_plan:
+            return ""
+        nodes = []
+
+        def collect(n):
+            nodes.append(n)
+            for sub in n.get("Plans", []):
+                collect(sub)
+
+        collect(root_plan)
+
+        hit = root_plan.get("Shared Hit Blocks", 0)
+        read = root_plan.get("Shared Read Blocks", 0)
+        temp_read = 0
+        temp_written = 0
+        for n in nodes:
+            temp_read += n.get("Temp Read Blocks", 0)
+            temp_written += n.get("Temp Written Blocks", 0)
+
+        lines = [
+            "=======================================================",
+            "[5] BUFFER / I/O ANALYSIS",
+            "=======================================================",
+        ]
+
+        total_shared = hit + read
+        if total_shared > 0:
+            hit_ratio = (hit / total_shared) * 100
+            lines.append(
+                f"• Shared Buffer Hit Rate: {hit_ratio:.2f}% (Hit: {hit:,} 블록, Read: {read:,} 블록)"
+            )
+            if read > 0:
+                lines.append(
+                    f"• 디스크 I/O 발생: {read:,} 블록이 디스크/OS 캐시에서 물리적으로 읽혔습니다."
+                )
+            else:
+                lines.append(
+                    "• 100% 메모리 버퍼 캐시에서 처리되어 디스크 물리 I/O가 발생하지 않았습니다."
+                )
+        else:
+            lines.append("• 수집된 버퍼 I/O 정보가 없습니다. (BUFFERS 옵션 수집 확인)")
+
+        if temp_read > 0 or temp_written > 0:
+            lines.append(
+                f"⚠️ [임시 파일 I/O 감지] 쓰기 {temp_written:,} 블록 / 읽기 {temp_read:,} 블록 (work_mem 초과 디스크 Spill)"
+            )
+        else:
+            lines.append("• 임시 파일 디스크 Spill(Temp File I/O)이 발생하지 않았습니다.")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def generate_bottleneck_analysis(root_plan: dict[str, Any]) -> str:
+        if not root_plan:
+            return ""
+        nodes = []
+
+        def collect(n):
+            nodes.append(n)
+            for sub in n.get("Plans", []):
+                collect(sub)
+
+        collect(root_plan)
+
+        total_time = root_plan.get("Actual Total Time")
+        lines = [
+            "=======================================================",
+            "[6] PERFORMANCE & BOTTLENECK ANALYSIS",
+            "=======================================================",
+        ]
+
+        if total_time is None or total_time <= 0:
+            lines.append("• 실측 실행 시간 정보가 수집되지 않았습니다 (EXPLAIN ANALYZE 필요).")
+            return "\n".join(lines)
+
+        lines.append(f"• 전체 쿼리 실행시간: {total_time:.3f} ms")
+        if total_time <= 5.0:
+            lines.append(
+                f"• 현재 실행시간({total_time:.3f}ms)은 극히 빠르므로 시스템 관점에서 실질적인 성능 병목은 존재하지 않습니다."
+            )
+
+        node_exclusives = []
+        for n in nodes:
+            act_tot = n.get("Actual Total Time")
+            if act_tot is not None:
+                child_sum = sum(
+                    c.get("Actual Total Time", 0.0)
+                    for c in n.get("Plans", [])
+                    if c.get("Actual Total Time") is not None
+                )
+                exclusive = max(0.0, act_tot - child_sum)
+                pct = (exclusive / total_time) * 100 if total_time > 0 else 0
+                node_exclusives.append((exclusive, pct, n))
+
+        node_exclusives.sort(key=lambda x: x[0], reverse=True)
+
+        bottlenecks = [item for item in node_exclusives if item[1] >= 25.0]
+        if bottlenecks:
+            lines.append("• 주요 시간 점유 노드 (Exclusive Time 기준):")
+            for exc, pct, n in node_exclusives[:3]:
+                seq = n.get("_line_number", 0)
+                ntype = n.get("Node Type", "Node")
+                rel = n.get("Relation Name", "")
+                target_str = f" ({rel})" if rel else ""
+                is_primary = " 👈 [주요 병목 구간]" if pct >= 30.0 else ""
+                lines.append(
+                    f"  - [{seq}] {ntype}{target_str}: {exc:.3f} ms ({pct:.1f}%){is_primary}"
+                )
+        else:
+            lines.append(
+                "• 특정 노드에 편중된 심각한 독점 실행 시간(Exclusive Time 30% 이상)은 감지되지 않았습니다."
+            )
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def generate_join_analysis(root_plan: dict[str, Any]) -> str:
+        if not root_plan:
+            return ""
+        nodes = []
+
+        def collect(n):
+            nodes.append(n)
+            for sub in n.get("Plans", []):
+                collect(sub)
+
+        collect(root_plan)
+
+        join_types = {"Hash Join", "Nested Loop", "Merge Join"}
+        join_nodes = [n for n in nodes if n.get("Node Type") in join_types]
+
+        lines = [
+            "=======================================================",
+            "[7] JOIN ANALYSIS",
+            "=======================================================",
+        ]
+
+        if not join_nodes:
+            lines.append("• 실행 계획에 조인 연산(Join)이 존재하지 않습니다.")
+            return "\n".join(lines)
+
+        for n in join_nodes:
+            seq = n.get("_line_number", 0)
+            ntype = n.get("Node Type")
+            jtype = n.get("Join Type", "Inner")
+            cond = n.get("Hash Cond") or n.get("Join Filter") or n.get("Merge Cond") or "조건 없음"
+            lines.append(f"• [{seq}] {ntype}")
+            lines.append(f"  - 조인 조건: {cond}")
+
+            sub_plans = n.get("Plans", [])
+            if ntype == "Hash Join" and len(sub_plans) >= 2:
+                probe_node = sub_plans[0]
+                build_hash_node = sub_plans[1]
+                p_type = probe_node.get("Node Type", "Unknown")
+                p_rel = probe_node.get("Relation Name", "")
+                b_plans = build_hash_node.get("Plans", [])
+                b_rel = b_plans[0].get("Relation Name", "") if b_plans else ""
+                lines.append(
+                    f"  - 탐색 측 (Probe Side) : {p_type} ({p_rel})"
+                    if p_rel
+                    else f"  - 탐색 측 (Probe Side) : {p_type}"
+                )
+                lines.append(
+                    f"  - 해시 생성 측 (Build Side) : {b_rel}"
+                    if b_rel
+                    else "  - 해시 생성 측 (Build Side) : Hash Table"
+                )
+                batches = build_hash_node.get("Hash Batches") or n.get("Hash Batches")
+                buckets = build_hash_node.get("Hash Buckets") or n.get("Hash Buckets")
+                if batches and buckets:
+                    lines.append(
+                        f"  - 해시 버킷: {buckets:,}개, 배치: {batches} (단일 배치 내 메모리 처리 확인)"
+                        if batches == 1
+                        else f"  ⚠️ 해시 배치: {batches} (work_mem 초과로 다중 배치 처리됨)"
+                    )
+            elif ntype == "Nested Loop":
+                loops = n.get("Actual Loops", 1)
+                lines.append(f"  - 반복 수행: {loops:,}회 반복 구동")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def generate_sort_window_analysis(root_plan: dict[str, Any]) -> str:
+        if not root_plan:
+            return ""
+        nodes = []
+
+        def collect(n):
+            nodes.append(n)
+            for sub in n.get("Plans", []):
+                collect(sub)
+
+        collect(root_plan)
+
+        sort_nodes = [n for n in nodes if n.get("Node Type") in ("Sort", "Incremental Sort")]
+        window_nodes = [n for n in nodes if n.get("Node Type") == "WindowAgg"]
+
+        lines = [
+            "=======================================================",
+            "[8] SORT / WINDOW ANALYSIS",
+            "=======================================================",
+        ]
+
+        if not sort_nodes and not window_nodes:
+            lines.append("• 정렬(Sort) 및 윈도우 함수(WindowAgg) 연산이 존재하지 않습니다.")
+            return "\n".join(lines)
+
+        for n in sort_nodes:
+            seq = n.get("_line_number", 0)
+            ntype = n.get("Node Type")
+            method = n.get("Sort Method", "")
+            space_used = n.get("Sort Space Used", 0)
+            space_type = n.get("Sort Space Type", "Memory")
+            key = n.get("Sort Key", [])
+            key_str = ", ".join(key) if isinstance(key, list) else str(key)
+
+            lines.append(f"• [{seq}] {ntype}")
+            if key_str:
+                lines.append(f"  - 정렬 키: {key_str}")
+            if method:
+                lines.append(f"  - 정렬 방식: {method} ({space_used}kB {space_type})")
+                if space_type == "Disk" or "external" in method.lower():
+                    lines.append(
+                        "  ⚠️ [디스크 정렬 발생] work_mem 부족으로 임시 디스크 공간을 사용했습니다."
+                    )
+                else:
+                    lines.append("  - 정상적인 인-메모리 정렬입니다.")
+
+        for n in window_nodes:
+            seq = n.get("_line_number", 0)
+            lines.append(f"• [{seq}] WindowAgg (윈도우 함수 연산 수행)")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def generate_partition_append_analysis(root_plan: dict[str, Any]) -> str:
+        if not root_plan:
+            return ""
+        nodes = []
+
+        def collect(n):
+            nodes.append(n)
+            for sub in n.get("Plans", []):
+                collect(sub)
+
+        collect(root_plan)
+
+        append_nodes = [n for n in nodes if n.get("Node Type") in ("Append", "Merge Append")]
+        lines = [
+            "=======================================================",
+            "[9] PARTITION / APPEND ANALYSIS",
+            "=======================================================",
+        ]
+
+        if not append_nodes:
+            lines.append("• 파티션 병합(Append / Merge Append) 연산이 존재하지 않습니다.")
+            return "\n".join(lines)
+
+        for n in append_nodes:
+            seq = n.get("_line_number", 0)
+            sub_plans = n.get("Plans", [])
+            lines.append(
+                f"• [{seq}] {n.get('Node Type')} (총 {len(sub_plans)}개 하위 파티션/테이블)"
+            )
+            zero_rows_count = 0
+            for child in sub_plans:
+                c_rows = child.get("Actual Rows")
+                if c_rows is not None and c_rows == 0:
+                    zero_rows_count += 1
+            if zero_rows_count > 0:
+                lines.append(
+                    f"  - {len(sub_plans)}개 파티션 중 {zero_rows_count}개 파티션에서 반환 행이 0건이었습니다 (파티션 프루닝 여부 검토 가능)."
+                )
+            else:
+                lines.append("  - 모든 파티션에서 정상적으로 데이터가 조회되었습니다.")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def generate_overall_judgment(
+        root_plan: dict[str, Any],
+        recs: list[Any],
+        plan_data: list[dict[str, Any]] | None = None,
+    ) -> str:
+        lines = [
+            "=======================================================",
+            "[11] OVERALL TUNING JUDGMENT",
+            "=======================================================",
+        ]
+
+        exec_time = None
+        if plan_data and isinstance(plan_data, list) and len(plan_data) > 0:
+            exec_time = plan_data[0].get("Execution Time")
+        if exec_time is None and root_plan:
+            exec_time = root_plan.get("Actual Total Time")
+
+        has_critical = any(getattr(r, "severity", "") == "CRITICAL" for r in recs)
+        has_high = any(getattr(r, "severity", "") == "HIGH" for r in recs)
+
+        if exec_time is not None and exec_time <= 5.0 and not has_critical:
+            lines.append("• 종합 진단 평의: [최적 상태 / 튜닝 불필요]")
+            lines.append(
+                f"  현재 총 실행시간이 {exec_time:.3f}ms로 매우 우수하며, 서비스에 지장을 주는 병목이 감지되지 않았습니다."
+            )
+            lines.append(
+                "  일부 경미한 오차나 인덱스 부재가 있더라도 현 데이터 규모에서는 성급한 인덱스 추가나 SQL 수정을 권장하지 않습니다."
+            )
+        elif has_critical:
+            lines.append("• 종합 진단 평의: [긴급 튜닝 필요 / CRITICAL]")
+            lines.append("  디스크 Spill 또는 대규모 조인/풀스캔 병목이 발생하고 있습니다.")
+            lines.append("  상단 [10] 권장 사항 중 CRITICAL 가이드를 최우선으로 검토하십시오.")
+        elif has_high:
+            lines.append("• 종합 진단 평의: [성능 개선 권장 / HIGH]")
+            lines.append("  일부 노드에서 비효율적인 스캔이나 통계 정보 불일치가 확인되었습니다.")
+            lines.append(
+                "  가이드의 오진 가능성과 예상 효과를 고려하여 단계적으로 개선을 적용하십시오."
+            )
+        else:
+            lines.append("• 종합 진단 평의: [양호 / 모니터링]")
+            lines.append("  현재 옵티마이저가 수립한 실행 계획이 전반적으로 합리적입니다.")
+            lines.append("  데이터 증가에 따른 추세 모니터링을 권장합니다.")
 
         return "\n".join(lines)

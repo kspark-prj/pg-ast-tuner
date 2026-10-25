@@ -4,7 +4,9 @@ import socket
 import sys
 import threading
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+import webbrowser
+from datetime import datetime
+from tkinter import filedialog, messagebox, simpledialog
 from typing import Any
 
 import customtkinter as ctk
@@ -25,6 +27,7 @@ from config import ConfigManager, HistoryManager
 from core.catalog import PGMetadataProvider
 from core.engine import RuleEngine
 from core.parser import PGPlanAnalyzer
+from core.reporter import HTMLReportGenerator
 from models.recommendation import RecommendationModel
 from rules.base_rule import RuleContext
 
@@ -351,13 +354,30 @@ class App(ctk.CTk):
         right_panel.grid_rowconfigure(1, weight=1)
         right_panel.grid_columnconfigure(0, weight=1)
 
+        right_header = ctk.CTkFrame(right_panel, fg_color="transparent")
+        right_header.grid(row=0, column=0, padx=15, pady=(10, 2), sticky="ew")
+        right_header.grid_columnconfigure(0, weight=1)
+        right_header.grid_columnconfigure(1, weight=0)
+
         title_right = ctk.CTkLabel(
-            right_panel,
+            right_header,
             text="📋 실제 실행계획 & 튜닝 가이드 리포트",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color=self.color_text_normal,
         )
-        title_right.grid(row=0, column=0, padx=15, pady=(10, 2), sticky="w")
+        title_right.grid(row=0, column=0, sticky="w")
+
+        self.btn_export_html = ctk.CTkButton(
+            right_header,
+            text="🌐 다크테마 HTML 리포트 내보내기",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            height=28,
+            fg_color="#1E3A5F",
+            hover_color="#2B5282",
+            text_color="#FFFFFF",
+            command=self.export_html_report,
+        )
+        self.btn_export_html.grid(row=0, column=1, sticky="e")
 
         self.txt_result = ctk.CTkTextbox(
             right_panel,
@@ -623,7 +643,9 @@ class App(ctk.CTk):
 
                     self.after(
                         0,
-                        lambda: self.render_recommendations(raw_explain_text, all_recs, root_plan),
+                        lambda: self.render_recommendations(
+                            raw_explain_text, all_recs, root_plan, explain_data, query
+                        ),
                     )
 
                 finally:
@@ -657,15 +679,6 @@ class App(ctk.CTk):
                 error_preview += (
                     f"... {query[max(0, pos - 30) : pos]} 👉[여기]👈 {query[pos : pos + 30]} ..."
                 )
-
-            self.after(
-                0,
-                lambda error_val=err, preview_val=error_preview: self._set_result_text_colored(
-                    f"❌ [SQL 문법 오류 감지]\n작성하신 SQL 구문에 표준 PostgreSQL 문법에 맞지 않는 부분이 있습니다.\n"
-                    f"{preview_val}\n\n상세 메시지: {self.get_error_message(error_val)}",
-                    self.color_pink,
-                ),
-            )
 
             self.after(
                 0,
@@ -722,31 +735,87 @@ class App(ctk.CTk):
         raw_explain: str,
         recs: list[RecommendationModel],
         root_plan: dict[str, Any] | None = None,
+        explain_data: list[dict[str, Any]] | None = None,
+        query: str = "",
     ):
         self.txt_result.configure(state="normal")
         self.txt_result.delete("1.0", "end")
         self.txt_result.configure(text_color=self.color_text_normal)
 
-        formatted_explain = PGPlanAnalyzer.format_explain_with_line_numbers(raw_explain, root_plan)
+        # HTML 내보내기를 위한 직전 분석 데이터 캐싱
+        self._last_analysis_data = {
+            "raw_explain": raw_explain,
+            "recs": recs,
+            "root_plan": root_plan,
+            "explain_data": explain_data,
+            "query": query,
+            "formatted_tree": PGPlanAnalyzer.format_explain_with_line_numbers(raw_explain, root_plan),
+        }
 
-        self.txt_result.insert("end", "========================================================\n")
-        self.txt_result.insert("end", "🔍 [데이터베이스 실제 EXPLAIN 수립 결과]\n")
-        self.txt_result.insert("end", "========================================================\n")
+        # [1] PLAN SUMMARY
+        if root_plan:
+            summary_report = PGPlanAnalyzer.generate_plan_summary(root_plan, explain_data)
+            if summary_report:
+                self.txt_result.insert("end", f"{summary_report}\n\n")
+
+        # [2] PLAN DEPENDENCY TREE
+        self.txt_result.insert("end", "=======================================================\n")
+        self.txt_result.insert("end", "[2] PLAN DEPENDENCY TREE (실제 수립 계획)\n")
+        self.txt_result.insert("end", "=======================================================\n")
+        formatted_explain = PGPlanAnalyzer.format_explain_with_line_numbers(raw_explain, root_plan)
         self.txt_result.insert("end", f"{formatted_explain}\n\n")
 
+        # [3] EXECUTION DEPENDENCY STEPS (파이프라인 의존 순서)
         if root_plan:
             exec_process_report = PGPlanAnalyzer.generate_execution_process_report(root_plan)
             if exec_process_report:
                 self.txt_result.insert("end", f"{exec_process_report}\n\n")
 
-        self.txt_result.insert("end", "========================================================\n")
-        self.txt_result.insert("end", "💡 [지식 기반 자동 튜닝 권장 리포트]\n")
-        self.txt_result.insert("end", "========================================================\n")
+        # [4] CARDINALITY ANALYSIS
+        if root_plan:
+            card_report = PGPlanAnalyzer.generate_cardinality_analysis(root_plan)
+            if card_report:
+                self.txt_result.insert("end", f"{card_report}\n\n")
+
+        # [5] BUFFER / I/O ANALYSIS
+        if root_plan:
+            buffer_report = PGPlanAnalyzer.generate_buffer_io_analysis(root_plan)
+            if buffer_report:
+                self.txt_result.insert("end", f"{buffer_report}\n\n")
+
+        # [6] PERFORMANCE & BOTTLENECK ANALYSIS
+        if root_plan:
+            bottleneck_report = PGPlanAnalyzer.generate_bottleneck_analysis(root_plan)
+            if bottleneck_report:
+                self.txt_result.insert("end", f"{bottleneck_report}\n\n")
+
+        # [7] JOIN ANALYSIS
+        if root_plan:
+            join_report = PGPlanAnalyzer.generate_join_analysis(root_plan)
+            if join_report:
+                self.txt_result.insert("end", f"{join_report}\n\n")
+
+        # [8] SORT / WINDOW ANALYSIS
+        if root_plan:
+            sort_report = PGPlanAnalyzer.generate_sort_window_analysis(root_plan)
+            if sort_report:
+                self.txt_result.insert("end", f"{sort_report}\n\n")
+
+        # [9] PARTITION / APPEND ANALYSIS
+        if root_plan:
+            part_report = PGPlanAnalyzer.generate_partition_append_analysis(root_plan)
+            if part_report:
+                self.txt_result.insert("end", f"{part_report}\n\n")
+
+        # [10] KNOWLEDGE-BASED TUNING RECOMMENDATIONS
+        self.txt_result.insert("end", "=======================================================\n")
+        self.txt_result.insert("end", "[10] KNOWLEDGE-BASED TUNING RECOMMENDATIONS\n")
+        self.txt_result.insert("end", "=======================================================\n")
 
         if not recs:
             self.txt_result.insert(
                 "end",
-                "✅ 현재 옵티마이저가 수립한 실행 계획상 병목 구간이나 인덱스 누락이 감지되지 않는 최상의 플랜입니다.\n",
+                "✅ 현재 옵티마이저가 수립한 실행 계획상 병목 구간이나 인덱스 누락이 감지되지 않는 최상의 플랜입니다.\n\n",
             )
         else:
             for idx, rec in enumerate(recs, 1):
@@ -760,15 +829,17 @@ class App(ctk.CTk):
                 lines_info = ""
                 if getattr(rec, "plan_lines", None) and len(rec.plan_lines) > 0:
                     if len(rec.plan_lines) == 1:
-                        lines_info = f"SEQ {rec.plan_lines[0]}"
+                        lines_info = f"[{rec.plan_lines[0]}]"
                     else:
-                        lines_info = f"SEQ {', '.join(map(str, rec.plan_lines))}"
+                        lines_info = f"[{', '.join(map(str, rec.plan_lines))}]"
                 elif getattr(rec, "plan_line", None) is not None:
-                    lines_info = f"SEQ {rec.plan_line}"
+                    lines_info = f"[{rec.plan_line}]"
 
                 node_str = rec.plan_node or "Unknown"
                 mapping_str = f"{lines_info} [{node_str}]" if lines_info else node_str
 
+                conf_val = getattr(rec, "confidence", "MEDIUM")
+                self.txt_result.insert("end", f"  • 신뢰도 (Confidence) : {conf_val}\n")
                 self.txt_result.insert("end", f"  • 실행계획 위치 : {mapping_str}\n")
                 self.txt_result.insert("end", f"  • 현상 및 원인: {rec.reason}\n")
                 self.txt_result.insert("end", f"  • 조치 가이드: {rec.recommendation}\n")
@@ -781,12 +852,21 @@ class App(ctk.CTk):
                     self.txt_result.insert("end", f"  • 오진 가능성: {rec.false_positive_risk}\n")
                 self.txt_result.insert("end", "\n" + "-" * 55 + "\n\n")
 
+        # [11] OVERALL TUNING JUDGMENT
+        if root_plan:
+            judgment_report = PGPlanAnalyzer.generate_overall_judgment(
+                root_plan, recs, explain_data
+            )
+            if judgment_report:
+                self.txt_result.insert("end", f"{judgment_report}\n\n")
+
         self._apply_syntax_highlighting()
         self.txt_result.configure(state="disabled")
 
     def _apply_syntax_highlighting(self):
         textbox = self.txt_result
 
+        textbox.tag_config("header_tag", foreground="#61AFEF", font=ctk.CTkFont(family="Consolas", size=12, weight="bold"))
         textbox.tag_config("critical_tag", foreground=self.color_pink)
         textbox.tag_config("high_tag", foreground="#FF9644")
         textbox.tag_config("warning_tag", foreground=self.color_gold)
@@ -796,12 +876,13 @@ class App(ctk.CTk):
         full_text = textbox.get("1.0", "end")
 
         highlight_rules: list[tuple[str, str]] = [
+            (r"^\[(?:1|2|3|4|5|6|7|8|9|10|11)\] .*", "header_tag"),
             (r"🔴 \[CRITICAL\]", "critical_tag"),
             (r"🟠 \[HIGH\]", "high_tag"),
             (r"🟡 \[WARNING\]", "warning_tag"),
             (r"🟢 \[INFO\]", "info_tag"),
             (
-                r"CREATE\s+EXTEN.*|CREATE\s+INDEX.*?|SET\s+work_mem.*?;|ANALYZE\s+VERBOSE.*?;|SET\s+max_parallel_workers_per_gather.*?;",
+                r"CREATE\s+EXTEN.*|CREATE\s+INDEX.*?|SET\s+work_mem.*?;|ANALYZE\s+VERBOSE.*?;|CREATE\s+STATISTICS.*?|SET\s+max_parallel_workers_per_gather.*?;",
                 "sql_tag",
             ),
         ]
@@ -813,6 +894,46 @@ class App(ctk.CTk):
                 start_idx = f"1.0 + {start_offset} chars"
                 end_idx = f"1.0 + {end_offset} chars"
                 textbox.tag_add(tag_name, start_idx, end_idx)
+
+    def export_html_report(self):
+        data = getattr(self, "_last_analysis_data", None)
+        if not data or not data.get("root_plan"):
+            messagebox.showwarning(
+                "내보내기 불가",
+                "수집된 분석 결과가 없습니다. 먼저 SQL 질의 분석을 실행한 후 HTML 리포트를 내보내 주세요.",
+            )
+            return
+
+        default_name = f"pg_tuning_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+        filepath = filedialog.asksaveasfilename(
+            title="다크테마 HTML 리포트 저장 위치 선택",
+            defaultextension=".html",
+            filetypes=[("HTML 문서", "*.html"), ("모든 파일", "*.*")],
+            initialfile=default_name,
+        )
+        if not filepath:
+            return
+
+        try:
+            html_content = HTMLReportGenerator.generate(
+                raw_explain=data.get("raw_explain", ""),
+                recs=data.get("recs", []),
+                root_plan=data.get("root_plan"),
+                explain_data=data.get("explain_data"),
+                query=data.get("query", ""),
+                formatted_tree=data.get("formatted_tree", ""),
+            )
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(html_content)
+
+            abs_path = os.path.abspath(filepath)
+            webbrowser.open(f"file://{abs_path}")
+            messagebox.showinfo(
+                "저장 및 브라우저 열기 성공",
+                f"다크테마 HTML 리포트가 성공적으로 저장되었으며 웹 브라우저에서 열렸습니다:\n\n{abs_path}",
+            )
+        except Exception as e:
+            messagebox.showerror("저장 오류", f"HTML 리포트 저장 중 오류가 발생했습니다:\n{e}")
 
 
 if __name__ == "__main__":

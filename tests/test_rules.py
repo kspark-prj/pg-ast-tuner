@@ -554,10 +554,10 @@ def test_assign_line_numbers_and_formatting():
     assert root_plan["_line_number"] == 4
 
     formatted = PGPlanAnalyzer.format_explain_with_line_numbers(raw_explain, root_plan)
-    assert "SEQ  4 | Hash Join" in formatted
-    assert "SEQ  3 |   ->  Seq Scan on t1" in formatted
-    assert "SEQ  2 |   ->  Hash" in formatted
-    assert "SEQ  1 |         ->  Seq Scan on t2" in formatted
+    assert "[04] | Hash Join" in formatted
+    assert "[03] |   ->  Seq Scan on t1" in formatted
+    assert "[02] |   ->  Hash" in formatted
+    assert "[01] |         ->  Seq Scan on t2" in formatted
 
 
 def test_recommendation_line_mapping_integration():
@@ -658,11 +658,11 @@ def test_generate_execution_process_report():
     PGPlanAnalyzer.assign_line_numbers(root_plan, raw_explain)
     report = PGPlanAnalyzer.generate_execution_process_report(root_plan)
 
-    assert "📊 [단계별 실행 과정 분석 리포트 (실행 순서 기준)]" in report
-    assert "• [SEQ 1] Seq Scan (테이블: t2)" in report
-    assert "• [SEQ 2] Hash" in report
-    assert "• [SEQ 3] Seq Scan (테이블: t1)" in report
-    assert "• [SEQ 4] Hash Join" in report
+    assert "📊 [단계별 실행 의존성 분석 리포트 (파이프라인 준비 순서)]" in report
+    assert "• [1] Seq Scan (테이블: t2)" in report
+    assert "• [2] Hash" in report
+    assert "• [3] Seq Scan (테이블: t1)" in report
+    assert "• [4] Hash Join" in report
     assert "처리 실적:" in report
 
 
@@ -671,3 +671,289 @@ def test_generate_execution_process_report():
 
 
 
+
+
+def test_comprehensive_analysis_reports():
+    from core.parser import PGPlanAnalyzer
+    from models.recommendation import RecommendationModel
+
+    root_plan = {
+        "Node Type": "Hash Join",
+        "Join Type": "Inner",
+        "Hash Cond": "(t1.id = t2.t1_id)",
+        "Actual Startup Time": 0.035,
+        "Actual Total Time": 0.055,
+        "Actual Rows": 100,
+        "Actual Loops": 1,
+        "Plan Rows": 5000,
+        "Shared Hit Blocks": 12,
+        "Shared Read Blocks": 0,
+        "Plans": [
+            {
+                "Node Type": "Seq Scan",
+                "Relation Name": "t1",
+                "Actual Startup Time": 0.015,
+                "Actual Total Time": 0.025,
+                "Actual Rows": 100,
+                "Actual Loops": 1,
+                "Plan Rows": 100,
+            },
+            {
+                "Node Type": "Hash",
+                "Actual Startup Time": 0.020,
+                "Actual Total Time": 0.020,
+                "Actual Rows": 10,
+                "Actual Loops": 1,
+                "Plan Rows": 10,
+                "Hash Buckets": 1024,
+                "Hash Batches": 1,
+                "Plans": [
+                    {
+                        "Node Type": "Seq Scan",
+                        "Relation Name": "t2",
+                        "Actual Startup Time": 0.010,
+                        "Actual Total Time": 0.018,
+                        "Actual Rows": 10,
+                        "Actual Loops": 1,
+                        "Plan Rows": 10,
+                    }
+                ],
+            },
+        ],
+    }
+
+    raw_explain = "Hash Join\n  -> Seq Scan on t1\n  -> Hash\n        -> Seq Scan on t2"
+    PGPlanAnalyzer.assign_line_numbers(root_plan, raw_explain)
+
+    plan_data = [{"Execution Time": 0.123, "Planning Time": 0.045, "Plan": root_plan}]
+
+    # 1. Summary
+    summary = PGPlanAnalyzer.generate_plan_summary(root_plan, plan_data)
+    assert "[1] PLAN SUMMARY" in summary
+    assert "0.123 ms" in summary
+    assert "Hash Join" in summary
+
+    # 4. Cardinality
+    card = PGPlanAnalyzer.generate_cardinality_analysis(root_plan)
+    assert "[4] CARDINALITY ANALYSIS" in card
+    assert "추정 5,000행 vs 실측 100행" in card
+
+    # 5. Buffer / IO
+    buf = PGPlanAnalyzer.generate_buffer_io_analysis(root_plan)
+    assert "[5] BUFFER / I/O ANALYSIS" in buf
+    assert "100.00%" in buf
+
+    # 6. Bottleneck
+    bottleneck = PGPlanAnalyzer.generate_bottleneck_analysis(root_plan)
+    assert "[6] PERFORMANCE & BOTTLENECK ANALYSIS" in bottleneck
+
+    # 7. Join
+    join_rep = PGPlanAnalyzer.generate_join_analysis(root_plan)
+    assert "[7] JOIN ANALYSIS" in join_rep
+    assert "Hash Join" in join_rep
+
+    # 8. Sort / Window
+    sort_rep = PGPlanAnalyzer.generate_sort_window_analysis(root_plan)
+    assert "[8] SORT / WINDOW ANALYSIS" in sort_rep
+
+    # 9. Partition / Append
+    part_rep = PGPlanAnalyzer.generate_partition_append_analysis(root_plan)
+    assert "[9] PARTITION / APPEND ANALYSIS" in part_rep
+
+    # 11. Overall Judgment
+    recs = [
+        RecommendationModel(
+            title="테스트 권장",
+            description="설명",
+            severity="INFO",
+            reason="원인",
+            recommendation="가이드",
+            confidence="HIGH",
+        )
+    ]
+    judgment = PGPlanAnalyzer.generate_overall_judgment(root_plan, recs, plan_data)
+    assert "[11] OVERALL TUNING JUDGMENT" in judgment
+    assert "종합 진단 평의" in judgment
+
+
+def test_executor_pipeline_order_hash_join_build_first():
+    from core.parser import PGPlanAnalyzer
+
+    # 사용자의 실제 실행계획 구조 (중첩 Hash Join + Append + Hash)
+    root_plan = {
+        "Node Type": "Sort",
+        "Sort Key": ["(dense_rank() OVER (?))"],
+        "Plans": [
+            {
+                "Node Type": "WindowAgg",
+                "Plans": [
+                    {
+                        "Node Type": "Sort",
+                        "Sort Key": ["(count(rl.log_id)) DESC"],
+                        "Plans": [
+                            {
+                                "Node Type": "Aggregate",
+                                "Plans": [
+                                    {
+                                        "Node Type": "Hash Join",
+                                        "Hash Cond": "(r.user_id = u.user_id)",
+                                        "Plans": [
+                                            {
+                                                "Node Type": "Hash Join",
+                                                "Hash Cond": "(rl.routine_id = r.routine_id)",
+                                                "Plans": [
+                                                    {
+                                                        "Node Type": "Append",
+                                                        "Plans": [
+                                                            {
+                                                                "Node Type": "Seq Scan",
+                                                                "Relation Name": "routine_logs_y2026m08",
+                                                                "Alias": "rl_1",
+                                                            },
+                                                            {
+                                                                "Node Type": "Seq Scan",
+                                                                "Relation Name": "routine_logs_y2026m09",
+                                                                "Alias": "rl_2",
+                                                            },
+                                                        ],
+                                                    },
+                                                    {
+                                                        "Node Type": "Hash",
+                                                        "Plans": [
+                                                            {
+                                                                "Node Type": "Seq Scan",
+                                                                "Relation Name": "routines",
+                                                                "Alias": "r",
+                                                            }
+                                                        ],
+                                                    },
+                                                ],
+                                            },
+                                            {
+                                                "Node Type": "Hash",
+                                                "Plans": [
+                                                    {
+                                                        "Node Type": "Seq Scan",
+                                                        "Relation Name": "users",
+                                                        "Alias": "u",
+                                                    }
+                                                ],
+                                            },
+                                        ],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    raw_explain = """Sort
+  ->  WindowAgg
+    ->  Sort
+      ->  Aggregate
+        ->  Hash Join
+          ->  Hash Join
+            ->  Append
+              ->  Seq Scan on routine_logs_y2026m08 rl_1
+              ->  Seq Scan on routine_logs_y2026m09 rl_2
+            ->  Hash
+              ->  Seq Scan on routines r
+          ->  Hash
+            ->  Seq Scan on users u"""
+
+    PGPlanAnalyzer.assign_line_numbers(root_plan, raw_explain)
+    report = PGPlanAnalyzer.generate_execution_process_report(root_plan)
+
+    # 1. users 테이블의 Scan 및 Hash가 SEQ 1, SEQ 2로 최선행 실행되어야 함
+    assert "• [1] Seq Scan (테이블: users (alias: u))" in report
+    assert "• [2] Hash" in report
+    # 2. routines 테이블의 Scan 및 Hash가 그 다음 SEQ 3, SEQ 4로 실행되어야 함
+    assert "• [3] Seq Scan (테이블: routines (alias: r))" in report
+    assert "• [4] Hash" in report
+
+
+def test_html_report_generator():
+    from core.reporter import HTMLReportGenerator
+    from models.recommendation import RecommendationModel
+
+    root_plan = {
+        "Node Type": "Hash Join",
+        "Join Type": "Inner",
+        "Hash Cond": "(t1.id = t2.t1_id)",
+        "Actual Startup Time": 0.035,
+        "Actual Total Time": 0.055,
+        "Actual Rows": 100,
+        "Actual Loops": 1,
+        "Plan Rows": 5000,
+        "Shared Hit Blocks": 12,
+        "Shared Read Blocks": 0,
+        "_line_number": 3,
+        "Plans": [
+            {
+                "Node Type": "Hash",
+                "Actual Startup Time": 0.020,
+                "Actual Total Time": 0.020,
+                "Actual Rows": 10,
+                "Actual Loops": 1,
+                "Plan Rows": 10,
+                "_line_number": 1,
+                "Plans": [
+                    {
+                        "Node Type": "Seq Scan",
+                        "Relation Name": "t2",
+                        "Actual Startup Time": 0.010,
+                        "Actual Total Time": 0.018,
+                        "Actual Rows": 10,
+                        "Actual Loops": 1,
+                        "Plan Rows": 10,
+                        "_line_number": 0,
+                    }
+                ],
+            },
+            {
+                "Node Type": "Seq Scan",
+                "Relation Name": "t1",
+                "Actual Startup Time": 0.015,
+                "Actual Total Time": 0.025,
+                "Actual Rows": 100,
+                "Actual Loops": 1,
+                "Plan Rows": 100,
+                "_line_number": 2,
+            },
+        ],
+    }
+
+    recs = [
+        RecommendationModel(
+            rule_id="RULE_TEST_001",
+            title="테스트 권장 가이드",
+            description="상세 설명",
+            severity="HIGH",
+            priority=2,
+            confidence="HIGH",
+            reason="오류 원인",
+            recommendation="조치 방법",
+            recommended_sql="CREATE INDEX idx_test ON t1 (val);",
+            plan_node="Hash Join",
+            plan_line=3,
+        )
+    ]
+
+    html = HTMLReportGenerator.generate(
+        raw_explain="Hash Join\n  -> Hash\n  -> Seq Scan",
+        recs=recs,
+        root_plan=root_plan,
+        explain_data=[{"Execution Time": 0.055, "Planning Time": 0.012}],
+        query="SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id;",
+        formatted_tree="[03] | Hash Join\n[02] |   -> Seq Scan",
+    )
+
+    assert "<!DOCTYPE html>" in html
+    assert "PostgreSQL 쿼리 실행계획 & 튜닝 분석 리포트" in html
+    assert "--bg-body: #121314;" in html  # 다크 테마 CSS 확인
+    assert "0.055 ms" in html  # 총 실행시간
+    assert "CREATE INDEX idx_test ON t1 (val);" in html  # 권장 SQL
+    assert "copySql(" in html  # 클립보드 복사 스크립트

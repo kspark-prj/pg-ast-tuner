@@ -9,6 +9,9 @@ class RecommendationModel(BaseModel):
     description: str = Field(..., description="튜닝 권장 상세 설명 (Detailed description)")
     severity: str = Field(..., description="위험도 (CRITICAL / HIGH / WARNING / INFO)")
     priority: int = Field(default=3, description="우선순위 (1: Highest, 5: Lowest)")
+    confidence: str = Field(
+        default="MEDIUM", description="신뢰도 (HIGH / MEDIUM / LOW)"
+    )
     reason: str = Field(..., description="성능 저하 원인 및 현상 (Why this is an issue)")
     recommendation: str = Field(
         ..., description="구체적이고 액션 가능한 해결 방안 (Actionable recommendation)"
