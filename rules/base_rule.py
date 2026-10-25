@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Any, Union
+from typing import Any
+
+import sqlglot
+from sqlglot import exp
 
 from models.recommendation import RecommendationModel
 
@@ -16,6 +19,30 @@ class RuleContext:
         self.clean_query = clean_query
         self.metadata_provider = metadata_provider
         self.plan_data = plan_data
+        self._is_agg_only = None
+
+    def is_aggregate_only(self) -> bool:
+        """
+        [중앙 집중형 문맥 분석]
+        WHERE 절 필터 조건이 없거나, 전체 집계(COUNT, SUM, AVG 등) 중심인
+        쿼리 성격을 AST 기반으로 판별하고 결과를 캐싱합니다.
+        """
+        if self._is_agg_only is not None:
+            return self._is_agg_only
+
+        try:
+            target_query = self.clean_query or self.raw_query
+            parsed_tree = sqlglot.parse_one(target_query, read="postgres")
+            has_where = any(parsed_tree.find_all(exp.Where))
+            has_agg = any(
+                isinstance(node, (exp.Count, exp.Sum, exp.Avg, exp.Max, exp.Min))
+                for node in parsed_tree.find_all(exp.Func)
+            )
+            self._is_agg_only = not has_where or has_agg
+        except Exception:
+            self._is_agg_only = False
+
+        return self._is_agg_only
 
 
 class BaseRule(ABC):
@@ -31,11 +58,9 @@ class BaseRule(ABC):
     @abstractmethod
     def match(self, context: RuleContext, node: dict) -> bool:
         """이 룰이 현재 노드에 부합하는지 여부를 판단합니다."""
-        pass
 
     @abstractmethod
     def analyze(
         self, context: RuleContext, node: dict
-    ) -> Union[RecommendationModel, list[RecommendationModel]]:
+    ) -> RecommendationModel | list[RecommendationModel]:
         """노드를 정밀 진단하고 RecommendationModel 또는 그 리스트를 반환합니다."""
-        pass

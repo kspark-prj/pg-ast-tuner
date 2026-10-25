@@ -854,7 +854,7 @@ class App(ctk.CTk):
                     self.txt_result.insert("end", f"  • 오진 가능성: {rec.false_positive_risk}\n")
                 self.txt_result.insert("end", "\n" + "-" * 55 + "\n\n")
 
-        # [11] OVERALL TUNING JUDGMENT
+        # OVERALL TUNING JUDGMENT
         if root_plan:
             judgment_report = PGPlanAnalyzer.generate_overall_judgment(
                 root_plan, recs, explain_data

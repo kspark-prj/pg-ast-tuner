@@ -184,7 +184,6 @@ class PGPlanAnalyzer:
         except Exception:
             pass
 
-        # SQLGlot 파싱 실패 대비 Fallback 정규식 탐지 필터
         pattern = rf"{re.escape(target_col)}\s+like\s+['\"]%"
         if re.search(pattern, clean_sql, re.IGNORECASE):
             return True
@@ -194,10 +193,6 @@ class PGPlanAnalyzer:
     def extract_columns_via_ast_ordered(
         sql_query: str, target_table: str
     ) -> tuple[list[str], list[str], bool, bool]:
-        """
-        WHERE 조건절 컬럼과 JOIN/GROUP BY 절의 매핑 컬럼을 정밀하게 분리 추출합니다.
-        실패할 경우, 정규식 기반의 Fallback 루틴으로 복원합니다.
-        """
         clean_sql = PGPlanAnalyzer.clean_query_comments(sql_query)
         target_table_lower = target_table.lower().strip()
 
@@ -228,14 +223,12 @@ class PGPlanAnalyzer:
             where_columns: set[str] = set()
             join_group_columns: set[str] = set()
 
-            # 1. WHERE 절 내부 필터 컬럼 추적
             for where_clause in parsed_tree.find_all(exp.Where):
                 for col in where_clause.find_all(exp.Column):
                     col_name = col.this.name.lower().strip()
                     if col_name != "*" and is_target_column(col):
                         where_columns.add(col_name)
 
-            # 2. JOIN / GROUP / ORDER 절 내부 매핑 컬럼 추적
             for clause in parsed_tree.find_all((exp.Join, exp.Group, exp.Order)):
                 for col in clause.find_all(exp.Column):
                     col_name = col.this.name.lower().strip()
@@ -246,7 +239,6 @@ class PGPlanAnalyzer:
             return list(where_columns), list(join_group_columns), True, has_or_condition
 
         except Exception:
-            # Fallback 정규식 복원 루틴
             where_cols: list[str] = []
             where_match = re.search(
                 r"where\s+(.*?)(?:group\s+by|order\s+by|limit|$)",
@@ -274,7 +266,6 @@ class PGPlanAnalyzer:
             return where_cols, [], True, has_or
 
     def find_problematic_nodes(self, plan_node: dict[str, Any]) -> list[dict[str, Any]]:
-        """실행계획 트리를 재귀적으로 순회하여 분석 대상 노드를 수집합니다."""
         nodes: list[dict[str, Any]] = []
         node_type = plan_node.get("Node Type")
         if node_type in self._PROBLEMATIC_NODE_TYPES:
@@ -285,11 +276,6 @@ class PGPlanAnalyzer:
 
     @staticmethod
     def assign_line_numbers(root_plan: dict[str, Any], raw_explain_text: str) -> None:
-        """
-        JSON 플랜 트리의 각 노드에 대응하는 실제 실행 순서(Post-Order Traversal, 1-indexed)를
-        '_line_number' 키로 재귀 부여합니다. 또한 raw_explain_text 상의 대응 라인 인덱스(0-indexed)를
-        '_raw_line_idx' 키로 기록합니다.
-        """
         if not raw_explain_text or not root_plan:
             return
 
@@ -337,15 +323,6 @@ class PGPlanAnalyzer:
 
         exec_counter = [1]
 
-        def get_subtree_min_startup(node: dict[str, Any]) -> float | None:
-            startup = node.get("Actual Startup Time")
-            min_val = float(startup) if startup is not None else float("inf")
-            for sub in node.get("Plans", []):
-                c_min = get_subtree_min_startup(sub)
-                if c_min is not None and c_min < min_val:
-                    min_val = c_min
-            return min_val if min_val != float("inf") else None
-
         def get_ordered_children(node: dict[str, Any]) -> list[dict[str, Any]]:
             plans = node.get("Plans", [])
             if not plans or len(plans) <= 1:
@@ -354,9 +331,6 @@ class PGPlanAnalyzer:
             node_type = node.get("Node Type", "")
             child_info = []
             for i, child in enumerate(plans):
-                # PostgreSQL Executor 파이프라인 규칙:
-                # Hash Join의 경우 Build Side(Inner Plan, 보통 Node Type == 'Hash' 또는 i == 1)가
-                # 메모리에 100% 해시 테이블을 완성해야만 Probe Side(Outer Plan)를 실행할 수 있음
                 default_rank = i
                 if node_type == "Hash Join":
                     if child.get("Node Type") == "Hash" or i == 1:
@@ -381,7 +355,6 @@ class PGPlanAnalyzer:
 
     @staticmethod
     def render_json_plan_to_text(plan_node: dict[str, Any], indent_level: int = 0) -> str:
-        """JSON 실행계획 트리를 표준 PostgreSQL EXPLAIN 텍스트 형식으로 변환합니다 (단일 DB 실행 지원)."""
         if not plan_node:
             return ""
 
@@ -503,7 +476,6 @@ class PGPlanAnalyzer:
     def format_explain_with_line_numbers(
         raw_explain_text: str, root_plan: dict[str, Any] | None = None
     ) -> str:
-        """실행계획 텍스트 각 라인의 왼쪽에 실제 실행 순서(Post-Order) 기준 SEQ 번호를 추가합니다."""
         if not raw_explain_text:
             return ""
 
@@ -526,7 +498,6 @@ class PGPlanAnalyzer:
             collect_node_lines(root_plan)
 
         if not line_exec_map:
-            # Fallback: Parse indentation tree from raw_explain_text
             nodes_info = []
             for idx, line in enumerate(lines):
                 stripped = line.lstrip()
@@ -559,15 +530,6 @@ class PGPlanAnalyzer:
                     stack.append(node_item)
 
                 exec_seq = [1]
-
-                def get_fallback_subtree_min_startup(tnode):
-                    m_start = tnode.get("act_start")
-                    min_val = m_start if m_start is not None else float("inf")
-                    for child in tnode["children"]:
-                        c_min = get_fallback_subtree_min_startup(child)
-                        if c_min is not None and c_min < min_val:
-                            min_val = c_min
-                    return min_val if min_val != float("inf") else None
 
                 def get_ordered_fallback_children(tnode):
                     children = tnode["children"]
@@ -637,7 +599,6 @@ class PGPlanAnalyzer:
         sort_keys = node.get("Sort Key", [])
         sort_method = node.get("Sort Method", "")
         group_keys = node.get("Group Key", [])
-        strategy = node.get("Strategy", "")
 
         desc = ""
         if node_type == "Seq Scan":
@@ -756,10 +717,6 @@ class PGPlanAnalyzer:
 
     @staticmethod
     def generate_execution_process_report(root_plan: dict[str, Any]) -> str:
-        """
-        JSON 실행계획 트리의 노드들을 실제 실행 순서(Post-Order Traversal, 1-indexed) 순서대로 정렬하여
-        각 단계별 실행 과정, 연산 설명, 실측 성능 지표를 한글 리포트로 생성합니다.
-        """
         if not root_plan:
             return ""
 
@@ -841,13 +798,6 @@ class PGPlanAnalyzer:
                 lines.append(f"  - 버퍼/I/O : {', '.join(io_parts)}")
 
             lines.append("")
-
-        # if nodes:
-        #     seq_list = [f"SEQ {node.get('_line_number', 0)}" for node in nodes]
-        #     lines.append("--------------------------------------------------------")
-        #     lines.append("[최종 실행 순서]")
-        #     lines.append(" → ".join(seq_list))
-        #     lines.append("========================================================")
 
         return "\n".join(lines)
 
@@ -1091,7 +1041,6 @@ class PGPlanAnalyzer:
         for n in join_nodes:
             seq = n.get("_line_number", 0)
             ntype = n.get("Node Type")
-            jtype = n.get("Join Type", "Inner")
             cond = n.get("Hash Cond") or n.get("Join Filter") or n.get("Merge Cond") or "조건 없음"
             lines.append(f"• [{seq}] {ntype}")
             lines.append(f"  - 조인 조건: {cond}")
@@ -1233,7 +1182,7 @@ class PGPlanAnalyzer:
     ) -> str:
         lines = [
             "=======================================================",
-            "[11] OVERALL TUNING JUDGMENT",
+            "OVERALL TUNING JUDGMENT",
             "=======================================================",
         ]
 
@@ -1246,6 +1195,13 @@ class PGPlanAnalyzer:
         has_critical = any(getattr(r, "severity", "") == "CRITICAL" for r in recs)
         has_high = any(getattr(r, "severity", "") == "HIGH" for r in recs)
 
+        # [추가] MEM_002 (버퍼 히트율 저하 / 콜드 캐시 I/O 병목) 단독 CRITICAL 여부 파악
+        is_only_buffer_miss_critical = has_critical and all(
+            getattr(r, "rule_id", "") == "RULE_MEM_002"
+            for r in recs
+            if getattr(r, "severity", "") == "CRITICAL"
+        )
+
         if exec_time is not None and exec_time <= 5.0 and not has_critical:
             lines.append("• 종합 진단 평의: [최적 상태 / 튜닝 불필요]")
             lines.append(
@@ -1254,10 +1210,19 @@ class PGPlanAnalyzer:
             lines.append(
                 "  일부 경미한 오차나 인덱스 부재가 있더라도 현 데이터 규모에서는 성급한 인덱스 추가나 SQL 수정을 권장하지 않습니다."
             )
+        elif is_only_buffer_miss_critical:
+            # [추가] 콜드 캐시 / I/O 병목 전용 평의 메시지 출력
+            lines.append("• 종합 진단 평의: [I/O 웜업 필요 / MEMORY CACHE MISS]")
+            lines.append(
+                "  쿼리 구조(집계/스캔)는 정상이나, 데이터베이스 버퍼 캐시 미스로 인한 대규모 물리 디스크 I/O 병목이 발생하고 있습니다."
+            )
+            lines.append(
+                "  상단의 권장 사항 중 시스템 캐시 적재(pg_prewarm) 및 shared_buffers 증설 조치를 검토하십시오."
+            )
         elif has_critical:
             lines.append("• 종합 진단 평의: [긴급 튜닝 필요 / CRITICAL]")
             lines.append("  디스크 Spill 또는 대규모 조인/풀스캔 병목이 발생하고 있습니다.")
-            lines.append("  상단 [10] 권장 사항 중 CRITICAL 가이드를 최우선으로 검토하십시오.")
+            lines.append("  상단의 권장 사항 중 CRITICAL 가이드를 최우선으로 검토하십시오.")
         elif has_high:
             lines.append("• 종합 진단 평의: [성능 개선 권장 / HIGH]")
             lines.append("  일부 노드에서 비효율적인 스캔이나 통계 정보 불일치가 확인되었습니다.")

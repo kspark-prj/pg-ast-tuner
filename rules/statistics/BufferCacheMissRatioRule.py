@@ -5,7 +5,9 @@ from rules.base_rule import BaseRule, RuleContext
 class BufferCacheMissRatioRule(BaseRule):
     RULE_ID = "RULE_MEM_002"
     NAME = "BufferCacheMissRatioRule"
-    DESCRIPTION = "Shared Buffers 메모리 히트율이 낮아 실제 디스크 Read I/O 병목이 발생하는지 진단합니다."
+    DESCRIPTION = (
+        "Shared Buffers 메모리 히트율이 낮아 실제 디스크 Read I/O 병목이 발생하는지 진단합니다."
+    )
     CATEGORY = "MEMORY"
     TARGET_NODE_TYPES = [
         "Seq Scan",
@@ -48,20 +50,22 @@ class BufferCacheMissRatioRule(BaseRule):
                     severity="CRITICAL",
                     priority=1,
                     reason=(
-                        "1. [주요 원인] 인덱스 부재 또는 인덱스 가공(Suppression)으로 인해 대량의 데이터 블록을 물리 디스크에서 풀 스캔(Full Scan)하고 있습니다.\n"
-                        "2. [시스템 요인] shared_buffers 설정 크기가 부족하거나, 데이터베이스 재기동 등으로 인해 캐시가 아직 웜업(Warm-up)되지 않았습니다."
+                        "1. [주요 원인] 데이터베이스 버퍼 캐시(Shared Buffers)가 아직 웜업(Warm-up)되지 않았거나, 대용량 데이터를 처리하는 과정에서 캐시 미스(Cache Miss)가 발생하여 물리 디스크 I/O가 급증했습니다.\n"
+                        "2. [구조적 요인] 전체 집계(COUNT/SUM 등) 또는 대규모 스캔 쿼리의 특성상 메모리 적재 범위를 초과하는 데이터를 읽고 있습니다."
                     ),
                     recommendation=(
-                        "1. [최우선 조치] 본 리포트에 함께 제시된 인덱스 누락 및 컬럼 가공(Seq Scan/Index Scan) 튜닝 가이드를 먼저 적용하십시오. 인덱스가 활성화되면 디스크 I/O 요청량 자체가 급감하여 본 메모리 병목 현상도 자연스럽게 해결됩니다.\n"
-                        "2. [보조 조치] 인덱스 최적화 이후에도 디스크 읽기 비중이 높다면, postgresql.conf의 shared_buffers 값을 늘리거나 pg_prewarm 확장 모듈을 사용하여 자주 조회되는 주요 테이블을 메모리에 강제 상주시키십시오."
+                        "1. [최우선 조치] 본 쿼리가 인덱스가 불필요한 대규모 집계/분석 쿼리인지 확인하십시오. 집계 쿼리라면 인덱스 추가보다 시스템 캐시 최적화에 집중해야 합니다.\n"
+                        "2. [시스템 조치] 자주 조회되는 주요 테이블이나 인덱스가 메모리에 상주할 수 있도록 postgresql.conf의 shared_buffers 값을 증설하거나, pg_prewarm 확장 모듈을 활용한 캐시 사전 적재(Warm-up)를 검토하십시오."
                     ),
                     recommended_sql=(
-                        "-- 1단계: 함께 감지된 인덱스/스캔 튜닝 가이드 조치를 먼저 실행하여 I/O 발생량 줄이기\n\n"
-                        "-- 2단계: 시스템 공유 버퍼 크기 확인 및 증설 검토 (권장: 물리 RAM의 25% 내외)\n"
-                        "-- SHOW shared_buffers;"
+                        "-- 1단계: 시스템 공유 버퍼 크기 확인\n"
+                        "SHOW shared_buffers;\n\n"
+                        "-- 2단계: 주요 테이블 캐시 사전 적재 (pg_prewarm 확장 모듈 활용 예시)\n"
+                        "-- CREATE EXTENSION IF NOT EXISTS pg_prewarm;\n"
+                        "-- SELECT pg_prewarm('테이블명');"
                     ),
                     plan_node=node_type,
-                    estimated_gain="High (인덱스 튜닝 선행 시 극적인 I/O 절감)",
+                    estimated_gain="High (캐시 적재 시 I/O 지연 대폭 단축)",
                     false_positive_risk="Low",
                 )
             )

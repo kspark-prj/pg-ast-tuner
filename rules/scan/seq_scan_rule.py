@@ -83,6 +83,25 @@ class SeqScanRule(BaseRule):
         ordered = eq_cols + range_cols
         return list(dict.fromkeys(ordered))
 
+    @staticmethod
+    def _is_aggregate_only_query(query: str) -> bool:
+        """
+        WHERE 절 필터 조건이 거의 없거나 아예 없고,
+        전체 집계(COUNT, SUM, AVG 등) 위주로 구성된 쿼리인지 판별합니다.
+        """
+        try:
+            parsed_tree = sqlglot.parse_one(query, read="postgres")
+            # WHERE 절이 아예 존재하지 않는 경우
+            has_where = any(parsed_tree.find_all(exp.Where))
+            # SELECT 절에 집계 함수가 포함되어 있는지 확인
+            has_agg = any(
+                isinstance(node, (exp.Count, exp.Sum, exp.Avg, exp.Max, exp.Min))
+                for node in parsed_tree.find_all(exp.Func)
+            )
+            return not has_where or has_agg
+        except Exception:
+            return False
+
     def match(self, context: RuleContext, node: dict) -> bool:
         return node.get("Node Type") == "Seq Scan"
 
@@ -91,6 +110,9 @@ class SeqScanRule(BaseRule):
         node_type = node.get("Node Type", "Seq Scan")
         table_name = node.get("Relation Name")
         actual_rows = node.get("Actual Rows", 0)
+        actual_time = node.get(
+            "Actual Total Time", node.get("Actual Time", 0.0)
+        )  # 실행 시간 연동 방어
 
         if not table_name:
             return recommendations
@@ -127,7 +149,7 @@ class SeqScanRule(BaseRule):
         if not meta:
             return recommendations
 
-        # 소규모 테이블 필터 최우선 적용
+        # 1. 소규모 테이블 필터 최우선 적용
         if meta.total_rows < 1000:
             recommendations.append(
                 RecommendationModel(
@@ -137,6 +159,23 @@ class SeqScanRule(BaseRule):
                     priority=5,
                     reason="테이블의 크기가 너무 작아서 인덱스를 타는 것보다 풀 스캔하는 것이 오버헤드가 적습니다.",
                     recommendation="PostgreSQL 옵티마이저는 오버헤드를 막기 위해 의도적으로 풀 스캔을 선택한 것이므로 정상적인 상태입니다.",
+                    plan_node=node_type,
+                    estimated_gain="None",
+                    false_positive_risk="Low",
+                )
+            )
+            return recommendations
+
+        # 2. [오진 방지 추가] 전체 집계성 쿼리(WHERE 절 부재 또는 집계 함수 중심)이면서 처리 속도가 빠를 경우
+        if self._is_aggregate_only_query(context.raw_query) and not where_cols:
+            recommendations.append(
+                RecommendationModel(
+                    title=f"'{table_name}' 전체 집계성 테이블 풀 스캔 (정상)",
+                    description=f"'{table_name}' 테이블 전체를 대상으로 하는 집계 또는 순차 스캔 쿼리가 수행되었습니다.",
+                    severity="INFO",
+                    priority=5,
+                    reason="테이블 전체를 스캔하여 집계(COUNT/SUM 등)를 수행하는 쿼리는 인덱스 스캔보다 Seq Scan(또는 병렬 Seq Scan)이 가장 효율적인 아키텍처 접근 경로입니다.",
+                    recommendation="현재 상태로 최적화되어 있으므로 별도의 인덱스 추가나 튜닝이 불필요합니다.",
                     plan_node=node_type,
                     estimated_gain="None",
                     false_positive_risk="Low",
@@ -225,7 +264,20 @@ class SeqScanRule(BaseRule):
                                         exp.NEQ,
                                     ),
                                 ):
-                                    if isinstance(parent, (exp.Func, exp.Anonymous, exp.Cast)) and not isinstance(parent, (exp.And, exp.Or, exp.Not, exp.Like, exp.In, exp.Between, exp.Connector)):
+                                    if isinstance(
+                                        parent, (exp.Func, exp.Anonymous, exp.Cast)
+                                    ) and not isinstance(
+                                        parent,
+                                        (
+                                            exp.And,
+                                            exp.Or,
+                                            exp.Not,
+                                            exp.Like,
+                                            exp.In,
+                                            exp.Between,
+                                            exp.Connector,
+                                        ),
+                                    ):
                                         outermost_wrapper = parent
                                     parent = parent.parent
 
@@ -337,7 +389,6 @@ class SeqScanRule(BaseRule):
                 best_idx, best_eval = meta.find_best_index_with_score(where_cols)
 
                 if unindexed_cols:
-                    # 등가(=) 조건 컬럼 선두 배치 재정렬
                     ordered_unindexed_cols = self._reorder_index_columns(
                         context.raw_query, unindexed_cols
                     )
@@ -356,7 +407,6 @@ class SeqScanRule(BaseRule):
                         )
                     )
                 elif not best_idx:
-                    # 등가(=) 조건 컬럼 선두 배치 재정렬
                     ordered_where_cols = self._reorder_index_columns(context.raw_query, where_cols)
                     recommendations.append(
                         RecommendationModel(
@@ -373,7 +423,6 @@ class SeqScanRule(BaseRule):
                         )
                     )
                 elif best_eval.get("has_skipped_prefix"):
-                    # 등가(=) 조건 컬럼 선두 배치 재정렬
                     ordered_where_cols = self._reorder_index_columns(context.raw_query, where_cols)
                     recommendations.append(
                         RecommendationModel(

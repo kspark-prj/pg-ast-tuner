@@ -1,10 +1,11 @@
-import pytest
 from unittest.mock import MagicMock
+
+from core.catalog import IndexMetadata, TableMetadata
 from core.engine import RuleEngine
 from rules.base_rule import RuleContext
-from rules.scan.seq_scan_rule import SeqScanRule
 from rules.join.nested_loop_rule import NestedLoopRule
-from core.catalog import TableMetadata, IndexMetadata
+from rules.scan.seq_scan_rule import SeqScanRule
+
 
 def test_rule_discovery():
     mock_provider = MagicMock()
@@ -38,58 +39,77 @@ def test_rule_discovery():
     assert "RULE_STAT_008" in rule_ids  # WindowAggSortOverheadRule
     assert "RULE_SCAN_007" in rule_ids  # IndexFilterInefficiencyRule
     assert "RULE_SCAN_008" in rule_ids  # StaleVisibilityMapRule
-    assert "RULE_MEM_001" in rule_ids   # ExcessiveWorkMemRule
-    assert "RULE_MEM_002" in rule_ids   # BufferCacheMissRatioRule
-    assert "RULE_MEM_003" in rule_ids   # MaterializeSpillRule
-    assert "RULE_STR_001" in rule_ids   # CTEInliningFailureRule
-    assert "RULE_STR_002" in rule_ids   # ForeignTableScanRule
-    assert "RULE_STR_003" in rule_ids   # ConstraintTriggerOverheadRule
-    assert "RULE_STR_004" in rule_ids   # HotUpdateFailureRule
-    assert "RULE_STR_005" in rule_ids   # LockRowsOverheadRule
+    assert "RULE_MEM_001" in rule_ids  # ExcessiveWorkMemRule
+    assert "RULE_MEM_002" in rule_ids  # BufferCacheMissRatioRule
+    assert "RULE_MEM_003" in rule_ids  # MaterializeSpillRule
+    assert "RULE_STR_001" in rule_ids  # CTEInliningFailureRule
+    assert "RULE_STR_002" in rule_ids  # ForeignTableScanRule
+    assert "RULE_STR_003" in rule_ids  # ConstraintTriggerOverheadRule
+    assert "RULE_STR_004" in rule_ids  # HotUpdateFailureRule
+    assert "RULE_STR_005" in rule_ids  # LockRowsOverheadRule
+
 
 def test_seq_scan_small_table():
     mock_provider = MagicMock()
     mock_provider.get_table_metadata.return_value = TableMetadata(
-        table_name="small_table",
-        total_rows=500,
-        indices=[]
+        table_name="small_table", total_rows=500, indices=[]
     )
-    
+
     context = RuleContext(
         raw_query="SELECT * FROM small_table WHERE id = 1",
         clean_query="SELECT * FROM small_table WHERE id = 1",
-        metadata_provider=mock_provider
+        metadata_provider=mock_provider,
     )
-    
+
     rule = SeqScanRule()
-    node = {
-        "Node Type": "Seq Scan",
-        "Relation Name": "small_table",
-        "Actual Rows": 1
-    }
-    
+    node = {"Node Type": "Seq Scan", "Relation Name": "small_table", "Actual Rows": 1}
+
     assert rule.match(context, node) is True
     recs = rule.analyze(context, node)
     assert len(recs) == 1
     assert recs[0].severity == "INFO"
     assert "소형 테이블" in recs[0].title
 
+
+def test_seq_scan_aggregate_only_query():
+    """전체 집계성 쿼리(WHERE 절 부재 또는 COUNT/SUM 등)에서 대규모 Seq Scan 발생 시 오진 방지 검증"""
+    mock_provider = MagicMock()
+    mock_provider.get_table_metadata.return_value = TableMetadata(
+        table_name="migration_target_users", total_rows=10000000, indices=[]
+    )
+
+    context = RuleContext(
+        raw_query="SELECT COUNT(*), SUM(id) FROM migration_target_users",
+        clean_query="SELECT COUNT(*), SUM(id) FROM migration_target_users",
+        metadata_provider=mock_provider,
+    )
+
+    rule = SeqScanRule()
+    node = {"Node Type": "Seq Scan", "Relation Name": "migration_target_users", "Actual Rows": 1}
+
+    assert rule.match(context, node) is True
+    recs = rule.analyze(context, node)
+    assert len(recs) == 1
+    assert recs[0].severity == "INFO"
+    assert "집계성 테이블 풀 스캔" in recs[0].title
+
+
 def test_nested_loop_missing_index():
     context = RuleContext(
         raw_query="SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id",
         clean_query="SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id",
-        metadata_provider=MagicMock()
+        metadata_provider=MagicMock(),
     )
-    
+
     rule = NestedLoopRule()
     node = {
         "Node Type": "Nested Loop",
         "Plans": [
             {"Node Type": "Index Scan", "Relation Name": "t1"},
-            {"Node Type": "Seq Scan", "Relation Name": "t2"}
-        ]
+            {"Node Type": "Seq Scan", "Relation Name": "t2"},
+        ],
     }
-    
+
     assert rule.match(context, node) is True
     recs = rule.analyze(context, node)
     assert len(recs) == 1
@@ -97,24 +117,22 @@ def test_nested_loop_missing_index():
     assert "조인 인덱스 부재" in recs[0].title
 
 
-from rules.scan.IndexFilterInefficiencyRule import IndexFilterInefficiencyRule
 from rules.join.MergeJoinSortRule import MergeJoinSortRule
 from rules.scan.HighFilterRemovalRatioRule import HighFilterRemovalRatioRule
-from rules.join.NestedLoopHighLoopsRule import NestedLoopHighLoopsRule
+from rules.scan.IndexFilterInefficiencyRule import IndexFilterInefficiencyRule
+
 
 def test_index_filter_inefficiency_with_skipped_prefix():
     mock_provider = MagicMock()
     mock_provider.get_table_metadata.return_value = TableMetadata(
         table_name="t1",
         total_rows=100000,
-        indices=[
-            IndexMetadata(index_name="idx_t1_abc", columns=["a", "b", "c"], is_unique=False)
-        ]
+        indices=[IndexMetadata(index_name="idx_t1_abc", columns=["a", "b", "c"], is_unique=False)],
     )
     context = RuleContext(
         raw_query="SELECT * FROM t1 WHERE a = 1 AND c = 3",
         clean_query="SELECT * FROM t1 WHERE a = 1 AND c = 3",
-        metadata_provider=mock_provider
+        metadata_provider=mock_provider,
     )
     rule = IndexFilterInefficiencyRule()
     node = {
@@ -122,7 +140,7 @@ def test_index_filter_inefficiency_with_skipped_prefix():
         "Relation Name": "t1",
         "Index Name": "idx_t1_abc",
         "Actual Rows": 100,
-        "Rows Removed by Filter": 5000
+        "Rows Removed by Filter": 5000,
     }
     assert rule.match(context, node) is True
     recs = rule.analyze(context, node)
@@ -131,38 +149,33 @@ def test_index_filter_inefficiency_with_skipped_prefix():
     assert "Skipped Prefix" in recs[0].reason
     assert "idx_t1_abc" in recs[0].reason
 
+
 def test_merge_join_sort_with_full_cover():
     mock_provider = MagicMock()
     mock_provider.get_table_metadata.return_value = TableMetadata(
         table_name="t1",
         total_rows=50000,
-        indices=[
-            IndexMetadata(index_name="idx_t1_join", columns=["join_col"], is_unique=False)
-        ]
+        indices=[IndexMetadata(index_name="idx_t1_join", columns=["join_col"], is_unique=False)],
     )
     context = RuleContext(
         raw_query="SELECT * FROM t1 JOIN t2 ON t1.join_col = t2.join_col",
         clean_query="SELECT * FROM t1 JOIN t2 ON t1.join_col = t2.join_col",
-        metadata_provider=mock_provider
+        metadata_provider=mock_provider,
     )
     rule = MergeJoinSortRule()
     node = {
         "Node Type": "Merge Join",
         "Plans": [
-            {
-                "Node Type": "Sort",
-                "Plans": [
-                    {"Node Type": "Seq Scan", "Relation Name": "t1"}
-                ]
-            },
-            {"Node Type": "Index Scan", "Relation Name": "t2"}
-        ]
+            {"Node Type": "Sort", "Plans": [{"Node Type": "Seq Scan", "Relation Name": "t1"}]},
+            {"Node Type": "Index Scan", "Relation Name": "t2"},
+        ],
     }
     assert rule.match(context, node) is True
     recs = rule.analyze(context, node)
     assert len(recs) == 1
     assert "idx_t1_join" in recs[0].reason
     assert "정렬 방식" in recs[0].reason
+
 
 def test_high_filter_removal_ratio_alternative_index():
     mock_provider = MagicMock()
@@ -171,13 +184,13 @@ def test_high_filter_removal_ratio_alternative_index():
         total_rows=100000,
         indices=[
             IndexMetadata(index_name="idx_t1_current", columns=["other_col"], is_unique=False),
-            IndexMetadata(index_name="idx_t1_better", columns=["filter_col"], is_unique=False)
-        ]
+            IndexMetadata(index_name="idx_t1_better", columns=["filter_col"], is_unique=False),
+        ],
     )
     context = RuleContext(
         raw_query="SELECT * FROM t1 WHERE filter_col = 5",
         clean_query="SELECT * FROM t1 WHERE filter_col = 5",
-        metadata_provider=mock_provider
+        metadata_provider=mock_provider,
     )
     rule = HighFilterRemovalRatioRule()
     node = {
@@ -185,7 +198,7 @@ def test_high_filter_removal_ratio_alternative_index():
         "Relation Name": "t1",
         "Index Name": "idx_t1_current",
         "Actual Rows": 100,
-        "Rows Removed by Filter": 9900
+        "Rows Removed by Filter": 9900,
     }
     assert rule.match(context, node) is True
     recs = rule.analyze(context, node)
@@ -193,26 +206,21 @@ def test_high_filter_removal_ratio_alternative_index():
     assert "idx_t1_better" in recs[0].reason
     assert "회피하여" in recs[0].reason
 
+
 def test_seq_scan_skipped_prefix():
     mock_provider = MagicMock()
     mock_provider.get_table_metadata.return_value = TableMetadata(
         table_name="t1",
         total_rows=100000,
-        indices=[
-            IndexMetadata(index_name="idx_t1_abc", columns=["a", "b", "c"], is_unique=False)
-        ]
+        indices=[IndexMetadata(index_name="idx_t1_abc", columns=["a", "b", "c"], is_unique=False)],
     )
     context = RuleContext(
         raw_query="SELECT * FROM t1 WHERE a = 1 AND c = 3",
         clean_query="SELECT * FROM t1 WHERE a = 1 AND c = 3",
-        metadata_provider=mock_provider
+        metadata_provider=mock_provider,
     )
     rule = SeqScanRule()
-    node = {
-        "Node Type": "Seq Scan",
-        "Relation Name": "t1",
-        "Actual Rows": 100
-    }
+    node = {"Node Type": "Seq Scan", "Relation Name": "t1", "Actual Rows": 100}
     assert rule.match(context, node) is True
     recs = rule.analyze(context, node)
     assert len(recs) == 1
@@ -220,35 +228,31 @@ def test_seq_scan_skipped_prefix():
     assert "중간 컬럼 누락" in recs[0].title
     assert "idx_t1_abc" in recs[0].reason
 
+
 def test_query_history_saving_and_loading(tmp_path):
     import os
+
     from config import HistoryManager
 
-    # Override the history file path to a temp path for testing
     orig_file = HistoryManager.HISTORY_FILE
     temp_file = os.path.join(tmp_path, "temp_query_history.json")
     HistoryManager.HISTORY_FILE = temp_file
 
     try:
-        # Load initially - should be empty
         history = HistoryManager.load_history()
         assert len(history) == 0
 
-        # Save a query
         test_query = "SELECT * FROM test_table WHERE id = 1"
         HistoryManager.save_query(test_query)
 
-        # Load again - should contain 1 item
         history = HistoryManager.load_history()
         assert len(history) == 1
         assert history[0]["query"] == test_query
 
-        # Save a duplicate - should move to the top and keep length 1
         HistoryManager.save_query(test_query)
         history = HistoryManager.load_history()
         assert len(history) == 1
 
-        # Save another query
         another_query = "SELECT name FROM users"
         HistoryManager.save_query(another_query)
         history = HistoryManager.load_history()
@@ -256,24 +260,24 @@ def test_query_history_saving_and_loading(tmp_path):
         assert history[0]["query"] == another_query
         assert history[1]["query"] == test_query
     finally:
-        # Restore original path
         HistoryManager.HISTORY_FILE = orig_file
 
 
 def test_cross_join_rule_detected():
     from rules.join.CrossJoinRule import CrossJoinRule
+
     context = RuleContext(
         raw_query="SELECT * FROM t1 CROSS JOIN t2",
         clean_query="SELECT * FROM t1 CROSS JOIN t2",
-        metadata_provider=MagicMock()
+        metadata_provider=MagicMock(),
     )
     rule = CrossJoinRule()
     node = {
         "Node Type": "Nested Loop",
         "Plans": [
             {"Node Type": "Seq Scan", "Relation Name": "t1", "Alias": "t1"},
-            {"Node Type": "Seq Scan", "Relation Name": "t2", "Alias": "t2"}
-        ]
+            {"Node Type": "Seq Scan", "Relation Name": "t2", "Alias": "t2"},
+        ],
     }
     assert rule.match(context, node) is True
     recs = rule.analyze(context, node)
@@ -283,10 +287,11 @@ def test_cross_join_rule_detected():
 
 def test_cross_join_rule_parameterized_nested_loop():
     from rules.join.CrossJoinRule import CrossJoinRule
+
     context = RuleContext(
         raw_query="SELECT * FROM routines r JOIN routine_schedules s ON r.routine_id = s.routine_id",
         clean_query="SELECT * FROM routines r JOIN routine_schedules s ON r.routine_id = s.routine_id",
-        metadata_provider=MagicMock()
+        metadata_provider=MagicMock(),
     )
     rule = CrossJoinRule()
     node = {
@@ -296,7 +301,7 @@ def test_cross_join_rule_parameterized_nested_loop():
                 "Node Type": "Index Scan",
                 "Relation Name": "routines",
                 "Alias": "r",
-                "Index Cond": "(user_id = 1)"
+                "Index Cond": "(user_id = 1)",
             },
             {
                 "Node Type": "Bitmap Heap Scan",
@@ -308,11 +313,11 @@ def test_cross_join_rule_parameterized_nested_loop():
                     {
                         "Node Type": "Bitmap Index Scan",
                         "Index Name": "uq_routine_day",
-                        "Index Cond": "(routine_id = r.routine_id)"
+                        "Index Cond": "(routine_id = r.routine_id)",
                     }
-                ]
-            }
-        ]
+                ],
+            },
+        ],
     }
     assert rule.match(context, node) is True
     recs = rule.analyze(context, node)
@@ -321,10 +326,11 @@ def test_cross_join_rule_parameterized_nested_loop():
 
 def test_cross_join_rule_index_recheck_cond_exception():
     from rules.join.CrossJoinRule import CrossJoinRule
+
     context = RuleContext(
         raw_query="SELECT * FROM target_categories tc LEFT JOIN products p ON tc.category_id = p.category_id",
         clean_query="SELECT * FROM target_categories tc LEFT JOIN products p ON tc.category_id = p.category_id",
-        metadata_provider=MagicMock()
+        metadata_provider=MagicMock(),
     )
     rule = CrossJoinRule()
     node = {
@@ -335,21 +341,22 @@ def test_cross_join_rule_index_recheck_cond_exception():
                 "Node Type": "Index Scan",
                 "Relation Name": "products",
                 "Alias": "p",
-                "Index Cond": "(category_id = \"*VALUES*\".column1)"
-            }
-        ]
+                "Index Cond": '(category_id = "*VALUES*".column1)',
+            },
+        ],
     }
     assert rule.match(context, node) is True
     recs = rule.analyze(context, node)
-    assert len(recs) == 0  # Should NOT flag Cartesian product
+    assert len(recs) == 0
 
 
 def test_cross_join_rule_constrained_row_count_exception():
     from rules.join.CrossJoinRule import CrossJoinRule
+
     context = RuleContext(
         raw_query="SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id",
         clean_query="SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id",
-        metadata_provider=MagicMock()
+        metadata_provider=MagicMock(),
     )
     rule = CrossJoinRule()
     node = {
@@ -357,12 +364,19 @@ def test_cross_join_rule_constrained_row_count_exception():
         "Actual Rows": 10,
         "Plans": [
             {"Node Type": "Seq Scan", "Relation Name": "t1", "Alias": "t1", "Actual Rows": 10},
-            {"Node Type": "Index Scan", "Relation Name": "t2", "Alias": "t2", "Actual Rows": 1, "Actual Loops": 10, "Index Cond": "(t1_id = t1.id)"}
-        ]
+            {
+                "Node Type": "Index Scan",
+                "Relation Name": "t2",
+                "Alias": "t2",
+                "Actual Rows": 1,
+                "Actual Loops": 10,
+                "Index Cond": "(t1_id = t1.id)",
+            },
+        ],
     }
     assert rule.match(context, node) is True
     recs = rule.analyze(context, node)
-    assert len(recs) == 0  # Constrained row count (1 row per loop) -> No false positive
+    assert len(recs) == 0
 
 
 def test_index_scan_and_seq_scan_rule_no_meta_safe():
@@ -375,28 +389,17 @@ def test_index_scan_and_seq_scan_rule_no_meta_safe():
     context = RuleContext(
         raw_query="SELECT * FROM missing_table WHERE id = 1",
         clean_query="SELECT * FROM missing_table WHERE id = 1",
-        metadata_provider=mock_provider
+        metadata_provider=mock_provider,
     )
 
-    # 1. IndexScanRule
     idx_rule = IndexScanRule()
-    idx_node = {
-        "Node Type": "Index Scan",
-        "Relation Name": "missing_table",
-        "Actual Rows": 1000
-    }
+    idx_node = {"Node Type": "Index Scan", "Relation Name": "missing_table", "Actual Rows": 1000}
     assert idx_rule.match(context, idx_node) is True
     assert idx_rule.analyze(context, idx_node) == []
 
-    # 2. SeqScanRule
     seq_rule = SeqScanRule()
-    seq_node = {
-        "Node Type": "Seq Scan",
-        "Relation Name": "missing_table",
-        "Actual Rows": 1000
-    }
+    seq_node = {"Node Type": "Seq Scan", "Relation Name": "missing_table", "Actual Rows": 1000}
     assert seq_rule.match(context, seq_node) is True
-    # Should not raise AttributeError when meta is None
     assert seq_rule.analyze(context, seq_node) == []
 
 
@@ -405,35 +408,29 @@ def test_stale_visibility_map_rule_selective_filter():
 
     rule = StaleVisibilityMapRule()
 
-    # Case A: Selective filter on dense table. Total blocks is 2000, actual rows is 50.
-    # But Rows Removed by Filter is 199,950. Total live rows is 200,000.
-    # Live row density = 200,000 / 2000 = 100 rows/block >= 0.1. Should NOT trigger.
     node_dense = {
         "Node Type": "Seq Scan",
         "Relation Name": "dense_table",
         "Shared Hit Blocks": 1500,
         "Shared Read Blocks": 500,
         "Actual Rows": 50,
-        "Rows Removed by Filter": 199950
+        "Rows Removed by Filter": 199950,
     }
     context = RuleContext(
         raw_query="SELECT * FROM dense_table WHERE status = 'SPECIAL'",
         clean_query="SELECT * FROM dense_table WHERE status = 'SPECIAL'",
-        metadata_provider=MagicMock()
+        metadata_provider=MagicMock(),
     )
     assert rule.match(context, node_dense) is True
     assert rule.analyze(context, node_dense) == []
 
-    # Case B: True bloated table / dead tuples. Total blocks is 2000, actual rows is 50,
-    # Rows Removed by Filter is only 50 (i.e. only 100 live rows total in 2000 blocks).
-    # Live row density = 100 / 2000 = 0.05 < 0.1. Should trigger!
     node_bloated = {
         "Node Type": "Seq Scan",
         "Relation Name": "bloated_table",
         "Shared Hit Blocks": 1500,
         "Shared Read Blocks": 500,
         "Actual Rows": 50,
-        "Rows Removed by Filter": 50
+        "Rows Removed by Filter": 50,
     }
     recs = rule.analyze(context, node_bloated)
     assert len(recs) == 1
@@ -442,14 +439,13 @@ def test_stale_visibility_map_rule_selective_filter():
 
 def test_new_rules_execution():
     from rules.join.MemoizeCacheInefficiencyRule import MemoizeCacheInefficiencyRule
-    from rules.scan.BitmapMultiIndexInefficiencyRule import BitmapMultiIndexInefficiencyRule
     from rules.memory.MaterializeSpillRule import MaterializeSpillRule
+    from rules.scan.BitmapMultiIndexInefficiencyRule import BitmapMultiIndexInefficiencyRule
     from rules.statistics.WindowAggSortOverheadRule import WindowAggSortOverheadRule
     from rules.structural.LockRowsOverheadRule import LockRowsOverheadRule
 
     ctx = RuleContext("SELECT 1", "SELECT 1", MagicMock())
 
-    # 1. Memoize
     memoize_rule = MemoizeCacheInefficiencyRule()
     m_node = {"Node Type": "Memoize", "Cache Hits": 10, "Cache Misses": 50, "Cache Overflows": 2}
     assert memoize_rule.match(ctx, m_node) is True
@@ -457,15 +453,16 @@ def test_new_rules_execution():
     assert len(recs) == 1
     assert recs[0].rule_id == "RULE_JOIN_010" or "Memoize" in recs[0].title
 
-    # 2. BitmapMultiIndex
     bitmap_rule = BitmapMultiIndexInefficiencyRule()
-    b_node = {"Node Type": "BitmapAnd", "Plans": [{"Node Type": "Bitmap Index Scan"}, {"Node Type": "Bitmap Index Scan"}]}
+    b_node = {
+        "Node Type": "BitmapAnd",
+        "Plans": [{"Node Type": "Bitmap Index Scan"}, {"Node Type": "Bitmap Index Scan"}],
+    }
     assert bitmap_rule.match(ctx, b_node) is True
     recs = bitmap_rule.analyze(ctx, b_node)
     assert len(recs) == 1
     assert "BitmapAnd" in recs[0].title
 
-    # 3. Materialize
     mat_rule = MaterializeSpillRule()
     mat_node = {"Node Type": "Materialize", "Storage": "disk", "Peak Memory Usage": 2048}
     assert mat_rule.match(ctx, mat_node) is True
@@ -473,7 +470,6 @@ def test_new_rules_execution():
     assert len(recs) == 1
     assert "Materialize" in recs[0].title
 
-    # 4. WindowAgg
     w_rule = WindowAggSortOverheadRule()
     w_node = {"Node Type": "WindowAgg", "Plans": [{"Node Type": "Sort"}]}
     assert w_rule.match(ctx, w_node) is True
@@ -481,7 +477,6 @@ def test_new_rules_execution():
     assert len(recs) == 1
     assert "WindowAgg" in recs[0].title
 
-    # 5. LockRows
     lock_rule = LockRowsOverheadRule()
     lock_node = {"Node Type": "LockRows", "Plans": [{"Node Type": "Seq Scan"}]}
     assert lock_rule.match(ctx, lock_node) is True
@@ -537,13 +532,8 @@ def test_assign_line_numbers_and_formatting():
         "Node Type": "Hash Join",
         "Plans": [
             {"Node Type": "Seq Scan", "Relation Name": "t1"},
-            {
-                "Node Type": "Hash",
-                "Plans": [
-                    {"Node Type": "Seq Scan", "Relation Name": "t2"}
-                ]
-            }
-        ]
+            {"Node Type": "Hash", "Plans": [{"Node Type": "Seq Scan", "Relation Name": "t2"}]},
+        ],
     }
 
     PGPlanAnalyzer.assign_line_numbers(root_plan, raw_explain)
@@ -561,14 +551,12 @@ def test_assign_line_numbers_and_formatting():
 
 
 def test_recommendation_line_mapping_integration():
-    from core.parser import PGPlanAnalyzer
     from core.engine import RuleEngine
+    from core.parser import PGPlanAnalyzer
 
     mock_provider = MagicMock()
     mock_provider.get_table_metadata.return_value = TableMetadata(
-        table_name="t1",
-        total_rows=100000,
-        indices=[]
+        table_name="t1", total_rows=100000, indices=[]
     )
 
     raw_explain = (
@@ -585,11 +573,9 @@ def test_recommendation_line_mapping_integration():
             {"Node Type": "Seq Scan", "Relation Name": "t1", "Actual Rows": 100},
             {
                 "Node Type": "Hash",
-                "Plans": [
-                    {"Node Type": "Seq Scan", "Relation Name": "t2", "Actual Rows": 100}
-                ]
-            }
-        ]
+                "Plans": [{"Node Type": "Seq Scan", "Relation Name": "t2", "Actual Rows": 100}],
+            },
+        ],
     }
 
     PGPlanAnalyzer.assign_line_numbers(root_plan, raw_explain)
@@ -597,7 +583,7 @@ def test_recommendation_line_mapping_integration():
     context = RuleContext(
         raw_query="SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id",
         clean_query="SELECT * FROM t1 JOIN t2 ON t1.id = t2.t1_id",
-        metadata_provider=mock_provider
+        metadata_provider=mock_provider,
     )
 
     engine = RuleEngine(mock_provider)
@@ -666,13 +652,6 @@ def test_generate_execution_process_report():
     assert "처리 실적:" in report
 
 
-
-
-
-
-
-
-
 def test_comprehensive_analysis_reports():
     from core.parser import PGPlanAnalyzer
     from models.recommendation import RecommendationModel
@@ -727,40 +706,32 @@ def test_comprehensive_analysis_reports():
 
     plan_data = [{"Execution Time": 0.123, "Planning Time": 0.045, "Plan": root_plan}]
 
-    # 1. Summary
     summary = PGPlanAnalyzer.generate_plan_summary(root_plan, plan_data)
     assert "[1] PLAN SUMMARY" in summary
     assert "0.123 ms" in summary
     assert "Hash Join" in summary
 
-    # 4. Cardinality
     card = PGPlanAnalyzer.generate_cardinality_analysis(root_plan)
     assert "[4] CARDINALITY ANALYSIS" in card
     assert "추정 5,000행 vs 실측 100행" in card
 
-    # 5. Buffer / IO
     buf = PGPlanAnalyzer.generate_buffer_io_analysis(root_plan)
     assert "[5] BUFFER / I/O ANALYSIS" in buf
     assert "100.00%" in buf
 
-    # 6. Bottleneck
     bottleneck = PGPlanAnalyzer.generate_bottleneck_analysis(root_plan)
     assert "[6] PERFORMANCE & BOTTLENECK ANALYSIS" in bottleneck
 
-    # 7. Join
     join_rep = PGPlanAnalyzer.generate_join_analysis(root_plan)
     assert "[7] JOIN ANALYSIS" in join_rep
     assert "Hash Join" in join_rep
 
-    # 8. Sort / Window
     sort_rep = PGPlanAnalyzer.generate_sort_window_analysis(root_plan)
     assert "[8] SORT / WINDOW ANALYSIS" in sort_rep
 
-    # 9. Partition / Append
     part_rep = PGPlanAnalyzer.generate_partition_append_analysis(root_plan)
     assert "[9] PARTITION / APPEND ANALYSIS" in part_rep
 
-    # 11. Overall Judgment
     recs = [
         RecommendationModel(
             title="테스트 권장",
@@ -772,14 +743,13 @@ def test_comprehensive_analysis_reports():
         )
     ]
     judgment = PGPlanAnalyzer.generate_overall_judgment(root_plan, recs, plan_data)
-    assert "[11] OVERALL TUNING JUDGMENT" in judgment
+    assert "OVERALL TUNING JUDGMENT" in judgment
     assert "종합 진단 평의" in judgment
 
 
 def test_executor_pipeline_order_hash_join_build_first():
     from core.parser import PGPlanAnalyzer
 
-    # 사용자의 실제 실행계획 구조 (중첩 Hash Join + Append + Hash)
     root_plan = {
         "Node Type": "Sort",
         "Sort Key": ["(dense_rank() OVER (?))"],
@@ -867,10 +837,8 @@ def test_executor_pipeline_order_hash_join_build_first():
     PGPlanAnalyzer.assign_line_numbers(root_plan, raw_explain)
     report = PGPlanAnalyzer.generate_execution_process_report(root_plan)
 
-    # 1. users 테이블의 Scan 및 Hash가 SEQ 1, SEQ 2로 최선행 실행되어야 함
     assert "• [1] Seq Scan (테이블: users (alias: u))" in report
     assert "• [2] Hash" in report
-    # 2. routines 테이블의 Scan 및 Hash가 그 다음 SEQ 3, SEQ 4로 실행되어야 함
     assert "• [3] Seq Scan (테이블: routines (alias: r))" in report
     assert "• [4] Hash" in report
 
@@ -953,7 +921,7 @@ def test_html_report_generator():
 
     assert "<!DOCTYPE html>" in html
     assert "PostgreSQL 쿼리 실행계획 & 튜닝 분석 리포트" in html
-    assert "--bg-body: #121314;" in html  # 다크 테마 CSS 확인
-    assert "0.055 ms" in html  # 총 실행시간
-    assert "CREATE INDEX idx_test ON t1 (val);" in html  # 권장 SQL
-    assert "copySql(" in html  # 클립보드 복사 스크립트
+    assert "--bg-body: #121314;" in html
+    assert "0.055 ms" in html
+    assert "CREATE INDEX idx_test ON t1 (val);" in html
+    assert "copySql(" in html
